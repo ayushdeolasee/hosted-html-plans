@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Installed by `plans service install` (macOS LaunchAgent).
+  See plan.html §5 for the full design. This file is rendered from
+  service/launchd.plist.tmpl and written to
+  ~/Library/LaunchAgents/{{.Label}}.plist.
+
+  KeepAlive restarts the process if it crashes; RunAtLoad starts it at
+  login. stdout/stderr both go to LogPath (rotated by `plans run` on
+  startup once it exceeds ~10MB, per plan.html §7).
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>{{.Label}}</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>{{.BinaryPath}}</string>
+		<string>run</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>{{.LogPath}}</string>
+	<key>StandardErrorPath</key>
+	<string>{{.LogPath}}</string>
+	<key>ProcessType</key>
+	<string>Background</string>
+</dict>
+</plist>

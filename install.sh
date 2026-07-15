@@ -1,0 +1,818 @@
+#!/usr/bin/env bash
+# push-plan installer — https://github.com/ayushdeolasee/hosted-html-plans
+#
+# GENERATED FILE — do not edit. Edit scripts/push-plan and run
+# `make installer` (scripts/build-installer) to regenerate.
+#
+# Installs the `push-plan` command, which pushes an HTML deliverable (plan,
+# roadmap, report) to your hosted-html-plans server and prints back a URL.
+# No repo checkout required; the script is embedded in this installer.
+#
+# Quick start:
+#   curl -fsSL <install-url> | bash
+#   curl -fsSL <install-url> | bash -s -- --url https://plans.example.ts.net
+#
+# Options (pass after `bash -s --` when piping):
+#   --url URL       record the server URL as "push_url" in
+#                   ~/.config/plans/config.json, so you don't need $PLANS_URL
+#                   exported in every shell
+#   --bin-dir DIR   where to install (default: ~/.local/bin, or /usr/local/bin
+#                   if that's writable and ~/.local/bin isn't on PATH)
+#   --uninstall     remove the installed command
+#
+# Environment: PLANS_BIN_DIR, PLANS_URL, PLANS_CONFIG are honored as defaults.
+
+set -euo pipefail
+
+BIN_DIR="${PLANS_BIN_DIR:-}"
+SERVER_URL="${PLANS_URL:-}"
+CONFIG="${PLANS_CONFIG:-$HOME/.config/plans/config.json}"
+UNINSTALL=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --url)       SERVER_URL="${2:?--url needs a URL}"; shift 2 ;;
+    --bin-dir)   BIN_DIR="${2:?--bin-dir needs a directory}"; shift 2 ;;
+    --uninstall) UNINSTALL=1; shift ;;
+    -h|--help)
+      sed -n '2,26p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'
+      exit 0 ;;
+    *) echo "install: unknown option: $1" >&2; exit 1 ;;
+  esac
+done
+
+on_path() {
+  case ":${PATH}:" in *":$1:"*) return 0 ;; *) return 1 ;; esac
+}
+
+# Pick an install dir: an explicit choice wins; otherwise prefer ~/.local/bin
+# (the modern default, no sudo), falling back to /usr/local/bin only when it
+# is writable and ~/.local/bin isn't already on PATH.
+if [ -z "$BIN_DIR" ]; then
+  if on_path "$HOME/.local/bin" || [ ! -w /usr/local/bin ]; then
+    BIN_DIR="$HOME/.local/bin"
+  else
+    BIN_DIR="/usr/local/bin"
+  fi
+fi
+
+TARGET="$BIN_DIR/push-plan"
+
+if [ "$UNINSTALL" -eq 1 ]; then
+  if [ -e "$TARGET" ]; then
+    rm -f "$TARGET"
+    echo "removed  $TARGET"
+  else
+    echo "nothing to remove at $TARGET"
+  fi
+  exit 0
+fi
+
+if ! command -v curl >/dev/null 2>&1; then
+  echo "install: curl is required (push-plan uses it to talk to the server)" >&2
+  exit 1
+fi
+
+mkdir -p "$BIN_DIR"
+
+# Remove any existing entry first. Critical: if $TARGET is a symlink (e.g. an
+# older dev install that linked into a checkout), a plain `cat >` would follow
+# it and overwrite the link's target instead of replacing the link.
+rm -f "$TARGET"
+
+# ---- the push-plan script, embedded ----------------------------------------
+
+cat > "$TARGET" <<'PUSH_PLAN_SCRIPT_EOF__DO_NOT_EDIT'
+#!/usr/bin/env bash
+# push-plan — push an HTML deliverable to a hosted-html-plans server.
+#
+# Usage:
+#   push-plan <file.html> [title] [-m note] [--slug S] [--base-version N]
+#   push-plan draft [slug]              print the path to write the plan HTML to
+#   push-plan pull <slug> [--version N] fetch a plan into the draft cache
+#   push-plan gc                        drop drafts whose plan is gone server-side
+#
+# The draft cache exists so agents never litter a git worktree with plan HTML.
+# It lives at:
+#
+#   ${PLANS_DRAFT_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/plans/drafts}
+#
+# and holds exactly one file per plan: <slug>.html. Because the name is derived
+# from the plan's slug, every revision overwrites the same file — revisions can
+# never pile up, and "revert to an older version" is just `pull --version N`
+# overwriting that same path. A brand-new plan (no slug yet) gets a temporary
+# `_new-*.html` name, which is renamed to <slug>.html the moment the server
+# assigns a real slug on the first push.
+#
+# URL resolution, in order:
+#   1. $PLANS_URL env var
+#   2. "push_url" key in ~/.config/plans/config.json (if present)
+#   3. http://localhost:8080
+#
+# Repo + branch are auto-tagged from the git context this script runs in
+# (git remote get-url origin / git branch --show-current); both are omitted
+# gracefully when not run inside a repo, or when there's no remote.
+#
+# Portable: bash or zsh, macOS or Linux. Uses jq if available, else python3,
+# else a grep/sed fallback for the tiny bits of JSON we need to read.
+#
+# See agent-loop.html §5 (write primitives) and plan.html §10 (agent
+# integration) for the design this implements.
+
+set -u
+
+# ---- usage / arg parsing ----------------------------------------------
+
+usage() {
+  cat >&2 <<'EOF'
+usage:
+  push-plan <file.html> [title] [-m "note"] [--slug S] [--base-version N]
+  push-plan draft [slug]               print the draft path to write HTML to
+  push-plan pull <slug> [--version N]  fetch a plan into the draft cache
+  push-plan gc                         remove drafts with no plan on the server
+
+env:
+  PLANS_URL          override the server URL (else read from
+                      ~/.config/plans/config.json "push_url", else
+                      http://localhost:8080)
+  PLANS_DRAFT_DIR     override the draft cache directory (default
+                      ${XDG_CACHE_HOME:-$HOME/.cache}/plans/drafts)
+  PUSH_PLAN_AGENT     value for ?agent= (default: "cli")
+EOF
+}
+
+# A leading `draft` / `pull` / `gc` is a subcommand — unless a file by that
+# name actually exists, in which case the old positional form still wins and
+# `push-plan draft` keeps meaning "push the file ./draft".
+SUBCMD=""
+if [ $# -gt 0 ]; then
+  case "$1" in
+    draft|pull|gc)
+      if [ ! -e "$1" ]; then
+        SUBCMD="$1"
+        shift
+      fi
+      ;;
+  esac
+fi
+
+FILE=""
+TITLE=""
+NOTE=""
+SLUG=""
+BASE_VERSION=""
+VERSION=""
+
+case "$SUBCMD" in
+  draft)
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -h|--help) usage; exit 0 ;;
+        -*) echo "push-plan draft: unknown option: $1" >&2; exit 1 ;;
+        *)
+          if [ -z "$SLUG" ]; then
+            SLUG="$1"
+          else
+            echo "push-plan draft: unexpected argument: $1" >&2
+            exit 1
+          fi
+          shift
+          ;;
+      esac
+    done
+    ;;
+  pull)
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -v|--version)
+          if [ $# -lt 2 ]; then
+            echo "push-plan pull: $1 requires an argument" >&2
+            exit 1
+          fi
+          VERSION="$2"
+          shift 2
+          ;;
+        -h|--help) usage; exit 0 ;;
+        -*) echo "push-plan pull: unknown option: $1" >&2; exit 1 ;;
+        *)
+          if [ -z "$SLUG" ]; then
+            SLUG="$1"
+          else
+            echo "push-plan pull: unexpected argument: $1" >&2
+            exit 1
+          fi
+          shift
+          ;;
+      esac
+    done
+    if [ -z "$SLUG" ]; then
+      echo "push-plan pull: missing <slug>" >&2
+      usage
+      exit 1
+    fi
+    if [ -n "$VERSION" ]; then
+      case "$VERSION" in
+        *[!0-9]*|0)
+          echo "push-plan pull: --version must be a positive integer" >&2
+          exit 1
+          ;;
+      esac
+    fi
+    ;;
+  gc)
+    if [ $# -gt 0 ]; then
+      echo "push-plan gc: unexpected argument: $1" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -m|--note)
+          if [ $# -lt 2 ]; then
+            echo "push-plan: $1 requires an argument" >&2
+            exit 1
+          fi
+          NOTE="$2"
+          shift 2
+          ;;
+        -s|--slug)
+          if [ $# -lt 2 ]; then
+            echo "push-plan: $1 requires an argument" >&2
+            exit 1
+          fi
+          SLUG="$2"
+          shift 2
+          ;;
+        --base-version)
+          if [ $# -lt 2 ]; then
+            echo "push-plan: $1 requires an argument" >&2
+            exit 1
+          fi
+          BASE_VERSION="$2"
+          shift 2
+          ;;
+        -h|--help)
+          usage
+          exit 0
+          ;;
+        -*)
+          echo "push-plan: unknown option: $1" >&2
+          usage
+          exit 1
+          ;;
+        *)
+          if [ -z "$FILE" ]; then
+            FILE="$1"
+          elif [ -z "$TITLE" ]; then
+            TITLE="$1"
+          else
+            echo "push-plan: unexpected argument: $1" >&2
+            usage
+            exit 1
+          fi
+          shift
+          ;;
+      esac
+    done
+
+    if [ -z "$FILE" ]; then
+      echo "push-plan: missing <file.html>" >&2
+      usage
+      exit 1
+    fi
+
+    if [ ! -f "$FILE" ]; then
+      echo "push-plan: file not found: $FILE" >&2
+      exit 1
+    fi
+    ;;
+esac
+
+# `draft` is the one subcommand that never talks to the server.
+if [ "$SUBCMD" != "draft" ] && ! command -v curl >/dev/null 2>&1; then
+  echo "push-plan: curl is required but not found on PATH" >&2
+  exit 1
+fi
+
+# ---- tiny JSON helpers (jq > python3 > grep/sed) -----------------------
+
+# json_get_field <json-file-or-string-flag> <input> <key>
+# Reads a top-level string field from a JSON blob given on stdin.
+json_get_field() {
+  local key="$1"
+  if command -v jq >/dev/null 2>&1; then
+    jq -r --arg k "$key" '.[$k] // empty' 2>/dev/null
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c '
+import json, sys
+key = sys.argv[1]
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+v = d.get(key)
+if isinstance(v, str):
+    print(v)
+' "$key" 2>/dev/null
+  else
+    # crude fallback: only handles simple "key": "value" pairs.
+    grep -o "\"$key\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" 2>/dev/null \
+      | sed -E "s/.*\"$key\"[[:space:]]*:[[:space:]]*\"([^\"]*)\"/\1/" \
+      | head -n1
+  fi
+}
+
+# json_get_nested_field <input-on-stdin> <outer-key> <inner-key>
+json_get_nested_field() {
+  local outer="$1" inner="$2"
+  if command -v jq >/dev/null 2>&1; then
+    jq -r --arg o "$outer" --arg i "$inner" '.[$o][$i] // empty' 2>/dev/null
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c '
+import json, sys
+outer, inner = sys.argv[1], sys.argv[2]
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+v = d.get(outer, {})
+if isinstance(v, dict):
+    val = v.get(inner)
+    if isinstance(val, str):
+        print(val)
+' "$outer" "$inner" 2>/dev/null
+  else
+    grep -o "\"$inner\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" 2>/dev/null \
+      | sed -E "s/.*\"$inner\"[[:space:]]*:[[:space:]]*\"([^\"]*)\"/\1/" \
+      | head -n1
+  fi
+}
+
+# json_slugs — reads GET /api/plans (a JSON array of plan objects) on stdin
+# and prints one slug per line. Same jq > python3 > grep/sed ladder; the
+# fallback is safe here because slugs are always simple "slug": "..." pairs.
+json_slugs() {
+  if command -v jq >/dev/null 2>&1; then
+    jq -r '.[].slug // empty' 2>/dev/null
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+if isinstance(d, list):
+    for p in d:
+        if isinstance(p, dict) and isinstance(p.get("slug"), str):
+            print(p["slug"])
+' 2>/dev/null
+  else
+    grep -o "\"slug\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" 2>/dev/null \
+      | sed -E "s/.*\"slug\"[[:space:]]*:[[:space:]]*\"([^\"]*)\"/\1/"
+  fi
+}
+
+# ---- resolve server URL -------------------------------------------------
+
+resolve_url() {
+  if [ -n "${PLANS_URL:-}" ]; then
+    printf '%s\n' "$PLANS_URL"
+    return
+  fi
+
+  local cfg="${PLANS_CONFIG:-$HOME/.config/plans/config.json}"
+  if [ -f "$cfg" ]; then
+    local push_url
+    push_url="$(json_get_field "push_url" < "$cfg")"
+    if [ -n "$push_url" ]; then
+      printf '%s\n' "$push_url"
+      return
+    fi
+  fi
+
+  printf '%s\n' "http://localhost:8080"
+}
+
+PLANS_URL_RESOLVED="$(resolve_url)"
+# strip any trailing slash
+PLANS_URL_RESOLVED="${PLANS_URL_RESOLVED%/}"
+
+# ---- git context: repo + branch -----------------------------------------
+
+normalize_repo() {
+  local url="$1"
+  # strip trailing .git
+  url="${url%.git}"
+  case "$url" in
+    git@*)
+      # git@host:owner/name
+      local host_path host path
+      host_path="${url#git@}"
+      host="${host_path%%:*}"
+      path="${host_path#*:}"
+      printf '%s/%s\n' "$host" "$path"
+      ;;
+    ssh://*)
+      local rest
+      rest="${url#ssh://}"
+      rest="${rest#git@}"
+      # drop an optional :port right after the host
+      rest="$(printf '%s' "$rest" | sed -E 's#^([^/:]+):[0-9]+/#\1/#')"
+      printf '%s\n' "$rest"
+      ;;
+    http://*|https://*)
+      local rest
+      rest="${url#*://}"
+      rest="${rest#*@}" # drop any user@ credentials
+      printf '%s\n' "$rest"
+      ;;
+    *)
+      printf '%s\n' "$url"
+      ;;
+  esac
+}
+
+REPO=""
+BRANCH=""
+if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  origin_url="$(git remote get-url origin 2>/dev/null || true)"
+  if [ -n "$origin_url" ]; then
+    REPO="$(normalize_repo "$origin_url")"
+  fi
+  BRANCH="$(git branch --show-current 2>/dev/null || true)"
+fi
+
+# ---- draft cache ---------------------------------------------------------
+#
+# One file per plan, named after the plan's slug. Everything below refuses to
+# touch anything outside DRAFT_DIR — deletions in particular are guarded by
+# in_draft_dir(), which resolves symlinks before comparing.
+
+DRAFT_DIR="${PLANS_DRAFT_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/plans/drafts}"
+
+ensure_draft_dir() {
+  if [ ! -d "$DRAFT_DIR" ]; then
+    mkdir -p "$DRAFT_DIR" || {
+      echo "push-plan: could not create draft dir: $DRAFT_DIR" >&2
+      exit 1
+    }
+    chmod 0700 "$DRAFT_DIR" 2>/dev/null || true
+  fi
+}
+
+# slugify — the same normalization the server applies (lowercase, runs of
+# non-alphanumerics collapsed to '-', trimmed; empty becomes "plan"). Keeping
+# it in sync means the path we print is the path the plan will keep.
+slugify() {
+  local s
+  s="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')"
+  [ -z "$s" ] && s="plan"
+  printf '%s' "$s"
+}
+
+# new_draft_name — the temporary name for a plan the server hasn't slugged
+# yet. Derived from the git context (or the working directory) so that two
+# calls in the same place return the same path rather than piling up files.
+# The `_` prefix can't collide with a real slug, and marks the file as "not
+# yet a plan" for gc.
+new_draft_name() {
+  local ctx=""
+  if [ -n "$REPO" ] || [ -n "$BRANCH" ]; then
+    ctx="${REPO}-${BRANCH}"
+  else
+    ctx="$(basename "$PWD")"
+  fi
+  printf '_new-%s' "$(slugify "$ctx")"
+}
+
+# dir_of — the absolute, symlink-resolved directory containing a path.
+dir_of() {
+  local d
+  d="$(dirname "$1")"
+  (cd "$d" 2>/dev/null && pwd -P)
+}
+
+# in_draft_dir <path> — true only when path sits directly inside DRAFT_DIR.
+# Every deletion and every rename is gated on this.
+in_draft_dir() {
+  local real_draft file_dir
+  real_draft="$(cd "$DRAFT_DIR" 2>/dev/null && pwd -P)" || return 1
+  file_dir="$(dir_of "$1")" || return 1
+  [ -n "$real_draft" ] && [ "$file_dir" = "$real_draft" ]
+}
+
+# ---- percent-encoding ----------------------------------------------------
+
+# Percent-encode a query-string value. NOTE: we build the full request URL
+# ourselves (rather than using curl's `-G`/`--data-urlencode`) because `-G`
+# redirects ALL `-d`/`--data-binary` payloads into the URL as GET params —
+# which would send the plan's HTML body as a query string instead of the
+# POST body. Keeping our own encoder lets --data-binary stay the body.
+urlencode() {
+  local string="$1" strlen out c
+  strlen=${#string}
+  out=""
+  for (( i = 0; i < strlen; i++ )); do
+    c="${string:i:1}"
+    case "$c" in
+      [a-zA-Z0-9.~_-]) out+="$c" ;;
+      *) out+=$(printf '%%%02X' "'$c") ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
+# ---- subcommand: draft ---------------------------------------------------
+#
+# Print the path the agent should write its HTML to. Never write plan HTML
+# into a git worktree; write here, push from here.
+
+if [ "$SUBCMD" = "draft" ]; then
+  ensure_draft_dir
+  if [ -n "$SLUG" ]; then
+    name="$(slugify "$SLUG")"
+  else
+    name="$(new_draft_name)"
+  fi
+  printf '%s/%s.html\n' "$DRAFT_DIR" "$name"
+  exit 0
+fi
+
+# ---- subcommand: pull ----------------------------------------------------
+#
+# Fetch a plan (latest, or ?version=N) into <draftdir>/<slug>.html, clobbering
+# whatever was there. That overwrite IS the revert flow: there is no second,
+# newer file to clean up, because there is only ever one file per plan.
+#
+# ?format=raw serves the stored bytes verbatim. A plain /p/{slug} view injects
+# either the live-reload client (latest) or the "viewing vN of M" banner
+# (historical), and since whatever we pull here gets pushed back on the next
+# revision, an injection would be round-tripped into the plan itself.
+
+if [ "$SUBCMD" = "pull" ]; then
+  ensure_draft_dir
+  slug="$(slugify "$SLUG")"
+
+  fetch_url="${PLANS_URL_RESOLVED}/p/${slug}?format=raw"
+  [ -n "$VERSION" ] && fetch_url="${fetch_url}&version=$(urlencode "$VERSION")"
+
+  tmp_body="$(mktemp)"
+  trap 'rm -f "$tmp_body" "$tmp_body.err"' EXIT
+
+  http_code="$(curl -sSL -o "$tmp_body" -w '%{http_code}' "$fetch_url" 2>"$tmp_body.err")"
+  curl_exit=$?
+
+  if [ $curl_exit -ne 0 ]; then
+    echo "push-plan: could not reach server at ${PLANS_URL_RESOLVED}" >&2
+    [ -s "$tmp_body.err" ] && cat "$tmp_body.err" >&2
+    exit 1
+  fi
+
+  case "$http_code" in
+    2??) ;;
+    *)
+      echo "push-plan: server returned HTTP $http_code for $fetch_url" >&2
+      cat "$tmp_body" >&2
+      exit 1
+      ;;
+  esac
+
+  target="${DRAFT_DIR}/${slug}.html"
+  cp -f "$tmp_body" "$target" || {
+    echo "push-plan: could not write $target" >&2
+    exit 1
+  }
+
+  echo "Pulled: ${slug} (v${VERSION:-latest})"
+  printf '%s\n' "$target"
+  exit 0
+fi
+
+# ---- subcommand: gc ------------------------------------------------------
+#
+# Drop draft files whose plan no longer exists on the server. Only *.html
+# directly inside DRAFT_DIR are ever considered, `_`-prefixed drafts (not yet
+# pushed, so not yet on the server) are skipped, and every unlink is gated on
+# in_draft_dir().
+
+if [ "$SUBCMD" = "gc" ]; then
+  if [ ! -d "$DRAFT_DIR" ]; then
+    echo "gc: no draft dir at $DRAFT_DIR — nothing to do"
+    exit 0
+  fi
+
+  tmp_body="$(mktemp)"
+  trap 'rm -f "$tmp_body" "$tmp_body.err"' EXIT
+
+  http_code="$(curl -sS -o "$tmp_body" -w '%{http_code}' "${PLANS_URL_RESOLVED}/api/plans" 2>"$tmp_body.err")"
+  curl_exit=$?
+
+  if [ $curl_exit -ne 0 ]; then
+    echo "push-plan: could not reach server at ${PLANS_URL_RESOLVED}" >&2
+    [ -s "$tmp_body.err" ] && cat "$tmp_body.err" >&2
+    exit 1
+  fi
+
+  case "$http_code" in
+    2??) ;;
+    *)
+      echo "push-plan: server returned HTTP $http_code listing plans" >&2
+      cat "$tmp_body" >&2
+      exit 1
+      ;;
+  esac
+
+  live_slugs="$(json_slugs < "$tmp_body")"
+
+  removed=0
+  for f in "$DRAFT_DIR"/*.html; do
+    [ -f "$f" ] || continue          # no match: the glob stayed literal
+    base="${f##*/}"
+    slug="${base%.html}"
+    case "$slug" in
+      _*) continue ;;                # not pushed yet, so not on the server
+    esac
+    if printf '%s\n' "$live_slugs" | grep -qx -- "$slug"; then
+      continue
+    fi
+    if in_draft_dir "$f"; then
+      rm -f -- "$f"
+      echo "removed  $f"
+      removed=$((removed + 1))
+    fi
+  done
+
+  if [ "$removed" -eq 0 ]; then
+    echo "gc: nothing to remove ($DRAFT_DIR)"
+  else
+    echo "gc: removed $removed draft(s)"
+  fi
+  exit 0
+fi
+
+# ---- push -----------------------------------------------------------------
+
+AGENT="${PUSH_PLAN_AGENT:-cli}"
+
+# A draft file is named after its plan, so a push from <draftdir>/<slug>.html
+# is by definition a revision of <slug> — tell the server so explicitly
+# instead of letting it re-derive a slug from the title (which would fork a
+# new plan the moment the title is reworded).
+FILE_BASE="${FILE##*/}"
+if [ -z "$SLUG" ] && in_draft_dir "$FILE"; then
+  case "$FILE_BASE" in
+    _*) ;; # brand-new draft: the server assigns the slug
+    *.html) SLUG="${FILE_BASE%.html}" ;;
+  esac
+fi
+[ -n "$SLUG" ] && SLUG="$(slugify "$SLUG")"
+
+query="agent=$(urlencode "$AGENT")"
+[ -n "$TITLE" ] && query="${query}&title=$(urlencode "$TITLE")"
+[ -n "$REPO" ] && query="${query}&repo=$(urlencode "$REPO")"
+[ -n "$BRANCH" ] && query="${query}&branch=$(urlencode "$BRANCH")"
+[ -n "$NOTE" ] && query="${query}&note=$(urlencode "$NOTE")"
+
+# --base-version means "revise this exact plan, and 409 if someone beat me to
+# it" — that's PUT /api/plans/{slug}. Without it we POST, which creates the
+# plan or appends a version to it when the slug already exists.
+if [ -n "$BASE_VERSION" ]; then
+  if [ -z "$SLUG" ]; then
+    echo "push-plan: --base-version needs a slug (--slug S, or push from <draftdir>/<slug>.html)" >&2
+    exit 1
+  fi
+  METHOD="PUT"
+  push_url="${PLANS_URL_RESOLVED}/api/plans/${SLUG}?${query}&base_version=$(urlencode "$BASE_VERSION")"
+else
+  METHOD="POST"
+  [ -n "$SLUG" ] && query="${query}&slug=$(urlencode "$SLUG")"
+  push_url="${PLANS_URL_RESOLVED}/api/plans?${query}"
+fi
+
+tmp_body="$(mktemp)"
+trap 'rm -f "$tmp_body" "$tmp_body.err"' EXIT
+
+http_code="$(curl -sS -o "$tmp_body" -w '%{http_code}' \
+  -X "$METHOD" "$push_url" \
+  -H "Content-Type: text/html" \
+  --data-binary "@${FILE}" \
+  2>"$tmp_body.err")"
+curl_exit=$?
+
+if [ $curl_exit -ne 0 ]; then
+  echo "push-plan: could not reach server at ${PLANS_URL_RESOLVED}" >&2
+  if [ -s "$tmp_body.err" ]; then
+    cat "$tmp_body.err" >&2
+  fi
+  rm -f "$tmp_body.err"
+  exit 1
+fi
+rm -f "$tmp_body.err"
+
+resp="$(cat "$tmp_body")"
+
+case "$http_code" in
+  2??)
+    ;;
+  *)
+    echo "push-plan: server returned HTTP $http_code" >&2
+    echo "$resp" >&2
+    exit 1
+    ;;
+esac
+
+slug="$(printf '%s' "$resp" | json_get_field "slug")"
+version="$(printf '%s' "$resp" | json_get_field "version")"
+lan_url="$(printf '%s' "$resp" | json_get_nested_field "urls" "lan")"
+tailnet_url="$(printf '%s' "$resp" | json_get_nested_field "urls" "tailnet")"
+
+echo "Pushed: ${slug:-<unknown>} (v${version:-?})"
+[ -n "$lan_url" ] && echo "  lan:     $lan_url"
+[ -n "$tailnet_url" ] && echo "  tailnet: $tailnet_url"
+if [ -z "$lan_url" ] && [ -z "$tailnet_url" ]; then
+  echo "  (server response did not include URLs — raw response below)"
+  echo "$resp"
+fi
+
+# ---- settle the draft on its canonical path -------------------------------
+#
+# The plan now has a server-assigned slug, so its one local file belongs at
+# <draftdir>/<slug>.html. A first push from a temporary `_new-*` draft is
+# renamed onto that path here; every later revision is already there and this
+# is a no-op. Files outside the draft dir (the old `push-plan ./plan.html`
+# form) are left strictly alone.
+
+if [ -n "$slug" ] && in_draft_dir "$FILE"; then
+  canonical="${DRAFT_DIR}/${slug}.html"
+  current="$(dir_of "$FILE")/${FILE_BASE}"
+  if [ "$current" != "$canonical" ] && in_draft_dir "$canonical"; then
+    if mv -f -- "$current" "$canonical"; then
+      echo "  draft:   $canonical"
+    fi
+  fi
+fi
+
+exit 0
+PUSH_PLAN_SCRIPT_EOF__DO_NOT_EDIT
+
+chmod +x "$TARGET"
+echo "installed  $TARGET"
+
+# ---- optionally record the server URL --------------------------------------
+
+if [ -n "$SERVER_URL" ]; then
+  SERVER_URL="${SERVER_URL%/}"
+  mkdir -p "$(dirname "$CONFIG")"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$CONFIG" "$SERVER_URL" <<'PY'
+import json, os, sys
+path, url = sys.argv[1], sys.argv[2]
+data = {}
+if os.path.exists(path):
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except Exception:
+        data = {}
+if not isinstance(data, dict):
+    data = {}
+data["push_url"] = url
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+os.replace(tmp, path)
+PY
+    echo "configured $CONFIG  push_url=$SERVER_URL"
+  elif [ ! -e "$CONFIG" ]; then
+    printf '{\n  "push_url": "%s"\n}\n' "$SERVER_URL" > "$CONFIG"
+    echo "configured $CONFIG  push_url=$SERVER_URL"
+  else
+    echo "install: python3 not found and $CONFIG already exists — add" >&2
+    echo "         \"push_url\": \"$SERVER_URL\" to it by hand." >&2
+  fi
+fi
+
+# ---- PATH check ------------------------------------------------------------
+
+if ! on_path "$BIN_DIR"; then
+  case "${SHELL:-}" in
+    */zsh) RC="~/.zshrc" ;;
+    */bash) RC="~/.bashrc" ;;
+    *) RC="your shell rc" ;;
+  esac
+  echo
+  echo "  !  $BIN_DIR is not on your PATH. Add this to $RC:"
+  echo "       export PATH=\"$BIN_DIR:\$PATH\""
+  echo "     then restart your shell (or run: export PATH=\"$BIN_DIR:\$PATH\")"
+fi
+
+echo
+echo "Done. Try:  push-plan --help"
+if [ -z "$SERVER_URL" ]; then
+  echo
+  echo "push-plan needs to know your server. Either re-run this installer with"
+  echo "  --url https://plans.<tailnet>.ts.net"
+  echo "or export PLANS_URL in your shell. Defaults to http://localhost:8080."
+fi

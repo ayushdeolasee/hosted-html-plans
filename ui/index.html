@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>plans</title>
+<style>
+  /* ------------------------------------------------------------------
+     Design tokens.
+
+     Two rules drive everything below:
+
+     1. Typeface encodes provenance. Serif = prose a human reads (plan
+        titles). Mono = data a machine wrote (slugs, versions, branches,
+        agents, timestamps). Sans = controls a human clicks. All three
+        come from the system stack so a box with no internet still renders
+        correctly.
+
+     2. --hazard is reserved for exactly one meaning: this plan is
+        reachable from the public internet (Tailscale funnel is open).
+        It appears nowhere else.
+     ------------------------------------------------------------------ */
+  :root {
+    color-scheme: light dark;
+
+    --paper:      #e7e9ec;
+    --plate:      #fbfbfc;
+    --gutter:     #dfe2e7;
+    --ink:        #171a20;
+    --graphite:   #5c6472;
+    --rule:       #d3d6dc;
+    --ultramarine:#2a35ce;
+    --ultra-wash: #e5e7fb;
+    --spine-origin:#3b424e;
+    --verdigris:  #14705a;
+    --hazard:     #8a6400;
+    --hazard-bg:  #f2d98a;
+    --alarm:      #a8261c;
+    --alarm-wash: #f7dedb;
+    /* Same hue as --hazard but a distinct token on purpose: --hazard means
+       exactly one thing (public internet exposure) and appears nowhere
+       else. --warn is the generic "needs attention" amber — e.g. restart
+       required, waiting for authentication. */
+    --warn:       #8a6400;
+    --warn-bg:    #f2d98a;
+
+    --serif: ui-serif, "New York", Iowan Old Style, Georgia, serif;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Mono", monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+
+    --radius: 5px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper:      #101216;
+      --plate:      #171a20;
+      --gutter:     #1e222a;
+      --ink:        #e4e6ea;
+      --graphite:   #8a93a3;
+      --rule:       #262a33;
+      --ultramarine:#7c86ff;
+      --ultra-wash: #1c2140;
+      --spine-origin:#aab2c0;
+      --verdigris:  #4fc49e;
+      --hazard:     #f0c14b;
+      --hazard-bg:  #3d3113;
+      --alarm:      #f08a80;
+      --alarm-wash: #3a1c19;
+      --warn:       #f0c14b;
+      --warn-bg:    #3d3113;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--ultramarine);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+
+  /* Small-caps mono label. Used for every machine-authored category:
+     section eyebrows, statuses, actions. */
+  .tag {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    font-weight: 600;
+  }
+
+  /* ---- controls ---- */
+
+  button {
+    font-family: var(--sans);
+    font-size: 12.5px;
+    font-weight: 550;
+    cursor: pointer;
+    color: var(--ink);
+    background: transparent;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    padding: 4px 10px;
+    transition: background 100ms ease, border-color 100ms ease, color 100ms ease;
+  }
+  button:hover { border-color: var(--graphite); background: var(--gutter); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.solid {
+    background: var(--ultramarine); border-color: var(--ultramarine); color: #fff;
+  }
+  button.solid:hover { filter: brightness(1.1); background: var(--ultramarine); }
+  button.armed {
+    background: var(--alarm-wash); border-color: var(--alarm); color: var(--alarm);
+  }
+  button.armed:hover { background: var(--alarm-wash); border-color: var(--alarm); }
+
+  input[type="search"] {
+    font: inherit;
+    font-size: 13.5px;
+    width: 100%;
+    color: var(--ink);
+    background: var(--plate);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    padding: 6px 10px;
+  }
+  input[type="search"]::placeholder { color: var(--graphite); }
+  input[type="search"]:focus-visible { outline-offset: -1px; }
+
+  .hidden { display: none !important; }
+
+  /* ---- masthead ---- */
+
+  header.masthead {
+    position: sticky; top: 0; z-index: 30;
+    background: var(--paper);
+    border-bottom: 1px solid var(--rule);
+  }
+  .masthead-inner {
+    max-width: 1160px; margin: 0 auto;
+    padding: 12px 24px;
+    display: flex; align-items: center; gap: 20px;
+  }
+  .wordmark {
+    font-family: var(--mono);
+    font-size: 15px; font-weight: 600; letter-spacing: -0.01em;
+    margin: 0; white-space: nowrap;
+  }
+  .wordmark::before {
+    /* The prompt this whole service answers. */
+    content: "~/ "; color: var(--graphite); font-weight: 400;
+  }
+  .search-wrap { flex: 1 1 auto; max-width: 380px; position: relative; }
+  .search-wrap kbd {
+    position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    font-family: var(--mono); font-size: 10.5px; color: var(--graphite);
+    border: 1px solid var(--rule); border-radius: 3px; padding: 0 4px;
+    pointer-events: none;
+  }
+  .search-wrap input:focus + kbd, .search-wrap input:not(:placeholder-shown) + kbd { opacity: 0; }
+  .views { display: flex; gap: 6px; margin-left: auto; }
+
+  /* ---- funnel banner: the one hazard-striped surface in the app ---- */
+
+  .funnel {
+    background:
+      repeating-linear-gradient(-45deg,
+        var(--hazard-bg) 0 10px,
+        color-mix(in srgb, var(--hazard-bg) 55%, var(--paper)) 10px 20px);
+    border-bottom: 1px solid var(--hazard);
+    color: var(--hazard);
+  }
+  .funnel-inner {
+    max-width: 1160px; margin: 0 auto; padding: 9px 24px;
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  }
+  .funnel-text { font-size: 13px; font-weight: 600; }
+  .funnel button {
+    background: var(--paper); border-color: var(--hazard); color: var(--hazard);
+    margin-left: auto;
+  }
+  .funnel button:hover { background: var(--paper); filter: brightness(1.04); }
+
+  /* ---- page frame ---- */
+
+  .frame {
+    max-width: 1160px; margin: 0 auto;
+    padding: 28px 24px 80px;
+    display: grid;
+    grid-template-columns: 176px 1fr;
+    gap: 36px;
+    align-items: start;
+  }
+  /* Grid items default to min-width:auto, which lets a wide child (the
+     scrolling facet strip, a long slug) stretch the grid and scroll the
+     whole page sideways. Both columns must be allowed to shrink. */
+  .frame > * { min-width: 0; }
+
+  /* The facets filter the plans list and do nothing to trash, so trash
+     doesn't show them. */
+  .frame.on-trash { grid-template-columns: 1fr; }
+  .frame.on-trash aside.rail { display: none; }
+
+  aside.rail {
+    position: sticky; top: 76px;
+    display: flex; flex-direction: column; gap: 26px;
+  }
+  .rail h2 {
+    color: var(--graphite);
+    margin: 0 0 9px;
+  }
+  .facets { display: flex; flex-direction: column; gap: 1px; }
+  .facet {
+    display: flex; align-items: baseline; gap: 8px;
+    width: 100%; text-align: left;
+    border: none; border-radius: 4px;
+    padding: 4px 7px;
+    font-size: 13px; color: var(--ink);
+    background: transparent;
+  }
+  .facet:hover { background: var(--gutter); border-color: transparent; }
+  .facet[aria-pressed="true"] {
+    background: var(--ultra-wash); color: var(--ultramarine); font-weight: 600;
+  }
+  .facet .n {
+    margin-left: auto; flex: 0 0 auto;
+    font-family: var(--mono); font-size: 11px; color: var(--graphite);
+    font-variant-numeric: tabular-nums;
+  }
+  .facet[aria-pressed="true"] .n { color: var(--ultramarine); }
+  .facet .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .facets .facet .label { font-family: inherit; }
+  .rail-repos .facet .label { font-family: var(--mono); font-size: 12px; }
+
+  /* ---- repo / branch grouping ---- */
+
+  .repo-group + .repo-group { margin-top: 44px; }
+  .repo-head {
+    font-family: var(--mono); font-size: 12.5px; font-weight: 600;
+    color: var(--ink);
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--ink);
+    overflow-wrap: anywhere;
+  }
+  .repo-head .host { color: var(--graphite); font-weight: 400; }
+
+  .branch-band {
+    display: flex; align-items: center; gap: 10px;
+    margin: 22px 0 10px;
+    color: var(--graphite);
+  }
+  .branch-band .rule { flex: 1; height: 1px; background: var(--rule); }
+  .branch-band .n { font-family: var(--mono); font-size: 11px; font-variant-numeric: tabular-nums; }
+
+  .rows { display: flex; flex-direction: column; gap: 8px; }
+
+  /* ---- plan row ---- */
+
+  .row {
+    display: grid;
+    grid-template-columns: 32px 1fr;
+    background: var(--plate);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .row:focus-within { border-color: var(--graphite); }
+
+  /* The signature: a stack of version ticks, newest at top — the plan's
+     page-edge. Two things are readable without clicking anything:
+
+       height of the stack = how much history the plan has accumulated
+       width of each tick  = how much of the document that write touched
+
+     A steadily-appended plan is a comb; a thrice-rewritten one is slabs. */
+  .spine {
+    display: flex; flex-direction: column; justify-content: flex-start; gap: 3px;
+    padding: 15px 0 15px 8px;
+    /* The axis the ticks hang off — a ruler, not a filled gutter. */
+    background: linear-gradient(var(--rule), var(--rule)) 8px 0 / 1px 100% no-repeat;
+  }
+  .tick {
+    display: block;
+    flex: 0 1 5px;          /* fixed height; shrinks only if history overruns the row */
+    min-height: 2px;
+    padding: 0; margin: 0;
+    border: none; border-radius: 0 2px 2px 0;
+    background: var(--graphite);
+    cursor: pointer;
+    transform-origin: left center;
+    transition: filter 90ms ease;
+  }
+  .tick:hover, .tick:focus-visible { filter: brightness(1.4); }
+  .tick:focus-visible { outline-offset: 1px; }
+  /* Blue = a deliberate rewrite of the document. Grey = accumulation. */
+  .tick.act-create  { width: 18px; background: var(--spine-origin); }
+  .tick.act-revise  { width: 18px; background: var(--ultramarine); }
+  .tick.act-append  { width: 10px; background: var(--graphite); }
+  .tick.act-status  { width: 5px;  background: var(--graphite); opacity: .55; }
+  .tick.act-restore { width: 18px; background: transparent;
+                      box-shadow: inset 0 0 0 1px var(--ultramarine); }
+  /* A write that skipped optimistic locking gets a cap, not a repaint. */
+  .tick.forced { box-shadow: inset -2px 0 0 var(--alarm); }
+
+  .row-body { padding: 12px 16px 12px 6px; min-width: 0; }
+
+  .row-head {
+    display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  }
+  .plan-title {
+    font-family: var(--serif);
+    font-size: 19px; font-weight: 600; line-height: 1.25;
+    letter-spacing: -0.005em;
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+  .plan-title a { color: inherit; text-decoration: none; }
+  .plan-title a:hover { text-decoration: underline; text-underline-offset: 3px; }
+  .title-edit {
+    font-family: var(--serif); font-size: 19px; font-weight: 600;
+    color: var(--ink); background: var(--paper);
+    border: 1px solid var(--ultramarine); border-radius: 3px;
+    padding: 1px 6px; min-width: 220px;
+  }
+
+  .status { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; }
+  .status::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor;
+  }
+  .status-draft       { color: var(--graphite); }
+  .status-draft::before { background: transparent; box-shadow: inset 0 0 0 1px currentColor; }
+  .status-approved    { color: var(--ultramarine); }
+  .status-in-progress { color: var(--ink); }
+  .status-in-progress::before {
+    background: linear-gradient(90deg, currentColor 50%, transparent 50%);
+    box-shadow: inset 0 0 0 1px currentColor;
+  }
+  .status-done        { color: var(--verdigris); }
+  .status-shared      { color: var(--hazard); }
+
+  /* One mono line of machine facts. */
+  .facts {
+    font-family: var(--mono); font-size: 11.5px; color: var(--graphite);
+    margin-top: 5px;
+    display: flex; flex-wrap: wrap; gap: 3px 8px;
+    font-variant-numeric: tabular-nums;
+  }
+  .facts .dot { opacity: .45; }
+  .facts .versions {
+    background: none; border: none; padding: 0;
+    font: inherit; color: var(--graphite); cursor: pointer;
+    text-decoration: underline; text-decoration-style: dotted;
+    text-underline-offset: 2px;
+  }
+  .facts .versions:hover { color: var(--ink); }
+
+  /* Phase progress: a segmented bar, one cell per phase — it counts, so
+     show the count, not a percentage. */
+  .phases { display: flex; gap: 3px; margin-top: 9px; align-items: center; }
+  .cell {
+    height: 4px; width: 22px; border-radius: 1px;
+    background: var(--gutter); box-shadow: inset 0 0 0 1px var(--rule);
+  }
+  .cell.done { background: var(--verdigris); box-shadow: none; }
+  .cell.active {
+    background: linear-gradient(90deg, var(--verdigris) 50%, var(--gutter) 50%);
+    box-shadow: inset 0 0 0 1px var(--rule);
+  }
+  .phases .count {
+    font-family: var(--mono); font-size: 11px; color: var(--graphite);
+    margin-left: 5px; font-variant-numeric: tabular-nums;
+  }
+
+  .actions { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 11px; }
+  .actions button { font-size: 12px; padding: 3px 9px; }
+  /* Actions rest quietly and step forward on hover or keyboard focus —
+     the list should read as a list, not a wall of buttons. */
+  @media (hover: hover) and (pointer: fine) {
+    .actions { opacity: .55; transition: opacity 120ms ease; }
+    .row:hover .actions, .row:focus-within .actions { opacity: 1; }
+  }
+
+  /* ---- version log ---- */
+
+  .log {
+    margin-top: 12px; padding-top: 10px;
+    border-top: 1px dashed var(--rule);
+    display: flex; flex-direction: column;
+  }
+  .log-row {
+    display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+    font-family: var(--mono); font-size: 11.5px;
+    padding: 5px 0;
+    font-variant-numeric: tabular-nums;
+  }
+  .log-row + .log-row { border-top: 1px solid var(--rule); }
+  .log-row .v { font-weight: 600; flex: 0 0 34px; }
+  .log-row .act { flex: 0 0 62px; color: var(--graphite); }
+  .log-row .act.revise { color: var(--ultramarine); }
+  .log-row .act.forced { color: var(--alarm); }
+  .log-row .when { color: var(--graphite); flex: 0 0 auto; }
+  .log-row .note {
+    flex: 1 1 140px; min-width: 0; color: var(--ink); overflow-wrap: anywhere;
+  }
+  .log-row .log-actions { margin-left: auto; display: flex; gap: 5px; }
+  .log-row button { font-size: 11px; padding: 2px 7px; }
+
+  /* Prune controls. Deleting history is irreversible, so the row sits under
+     a rule rather than inline with the versions, and the buttons arm before
+     they fire (button.armed, shared with plan delete / trash purge). */
+  .log-foot {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding-top: 9px; margin-top: 5px;
+    border-top: 1px solid var(--rule);
+  }
+  .log-hint { font-size: 11.5px; color: var(--graphite); }
+  .log-foot button { font-size: 11px; padding: 2px 7px; margin-left: auto; }
+
+  /* ---- states ---- */
+
+  .placeholder {
+    border: 1px dashed var(--rule); border-radius: var(--radius);
+    padding: 48px 24px; text-align: center; color: var(--graphite);
+  }
+  .placeholder p { margin: 0 0 6px; font-size: 14px; }
+  .placeholder code {
+    font-family: var(--mono); font-size: 12.5px;
+    background: var(--gutter); color: var(--ink);
+    padding: 2px 6px; border-radius: 3px;
+  }
+  .placeholder button { margin-top: 12px; }
+  .placeholder.failed { border-color: var(--alarm); color: var(--alarm); }
+
+  .note-line { color: var(--graphite); font-size: 13px; margin: 0 0 16px; }
+
+  /* ---- toasts (replacing alert()) ---- */
+
+  .toasts {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    z-index: 60;
+    display: flex; flex-direction: column; gap: 6px; align-items: center;
+    pointer-events: none;
+  }
+  .toast {
+    background: var(--ink); color: var(--paper);
+    font-size: 13px; font-weight: 500;
+    padding: 8px 14px; border-radius: var(--radius);
+    box-shadow: 0 4px 18px rgba(0,0,0,.22);
+    animation: toast-in 160ms ease both;
+    max-width: 90vw;
+  }
+  .toast.bad { background: var(--alarm); color: #fff; }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
+
+  /* ---- load-in: the ledger assembles once, top to bottom ----
+
+     Scoped to .booting, which app.js drops once the first paint has run.
+     Filtering, expanding a log and ticking a status all re-render these
+     same containers; replaying the entrance on each one would flash the
+     whole list on every keystroke. */
+
+  .booting .row { animation: row-in 260ms cubic-bezier(.2,.7,.3,1) both; }
+  @keyframes row-in { from { opacity: 0; transform: translateY(6px); } }
+  .booting .tick { animation: tick-in 200ms ease both; }
+  @keyframes tick-in { from { transform: scaleX(0); } }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 1ms !important;
+      animation-delay: 0ms !important;
+      transition-duration: 1ms !important;
+    }
+  }
+
+  /* ---- settings view ---- */
+
+  /* Settings has no rail (nothing to facet), same as trash. */
+  .frame.on-settings { grid-template-columns: 1fr; }
+  .frame.on-settings aside.rail { display: none; }
+
+  .notice-banner {
+    background: var(--warn-bg);
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    border-radius: var(--radius);
+    padding: 10px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    margin: 0 0 20px;
+  }
+  .notice-banner code {
+    font-family: var(--mono); font-weight: 600;
+    background: color-mix(in srgb, var(--warn-bg) 60%, var(--paper));
+    padding: 1px 5px; border-radius: 3px;
+  }
+
+  .settings-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
+    align-items: start;
+  }
+  .settings-card {
+    background: var(--plate);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    padding: 18px 20px 20px;
+  }
+  .settings-card h2 { margin: 0 0 14px; }
+
+  .field { margin-top: 14px; }
+  .field:first-of-type { margin-top: 0; }
+  .field-label {
+    display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px;
+  }
+  .field-help { font-size: 12px; color: var(--graphite); margin: 5px 0 0; }
+  .field-error {
+    color: var(--alarm); font-size: 12.5px; margin: 12px 0 0;
+  }
+
+  .text-input {
+    font: inherit; font-size: 13.5px; width: 100%;
+    color: var(--ink); background: var(--paper);
+    border: 1px solid var(--rule); border-radius: var(--radius);
+    padding: 6px 10px;
+  }
+  .text-input:focus-visible { outline-offset: -1px; }
+
+  .settings-actions { margin-top: 16px; display: flex; gap: 8px; align-items: center; }
+
+  /* toggle switch */
+  .switch { position: relative; display: inline-block; width: 34px; height: 20px; flex: 0 0 auto; }
+  .switch input {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    margin: 0; opacity: 0; cursor: pointer;
+  }
+  .switch input:disabled { cursor: default; }
+  .switch-track {
+    position: absolute; inset: 0;
+    background: var(--gutter); border: 1px solid var(--rule);
+    border-radius: 999px;
+    transition: background 120ms ease, border-color 120ms ease;
+  }
+  .switch-track::before {
+    content: ""; position: absolute; top: 2px; left: 2px;
+    width: 14px; height: 14px; border-radius: 50%;
+    background: var(--plate); box-shadow: 0 1px 2px rgba(0,0,0,.25);
+    transition: transform 120ms ease;
+  }
+  .switch input:checked + .switch-track { background: var(--ultramarine); border-color: var(--ultramarine); }
+  .switch input:checked + .switch-track::before { transform: translateX(14px); background: #fff; }
+  .switch input:disabled + .switch-track { opacity: .5; }
+  .switch input:focus-visible + .switch-track { outline: 2px solid var(--ultramarine); outline-offset: 2px; }
+
+  .toggle-row { display: flex; align-items: flex-start; gap: 12px; }
+  .toggle-row .field-label { margin-bottom: 2px; }
+
+  /* tailnet status badge — mirrors .status but a separate namespace since
+     it describes connection state, not plan state. */
+  .ts-status-line { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 13px; flex-wrap: wrap; }
+  .ts-status-line a { color: var(--ultramarine); }
+  .ts-badge { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; }
+  .ts-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .ts-state-disabled { color: var(--graphite); }
+  .ts-state-disabled::before { background: transparent; box-shadow: inset 0 0 0 1px currentColor; }
+  .ts-state-starting { color: var(--ink); }
+  .ts-state-starting::before {
+    background: linear-gradient(90deg, currentColor 50%, transparent 50%);
+    box-shadow: inset 0 0 0 1px currentColor;
+  }
+  .ts-state-waiting-for-auth { color: var(--ultramarine); }
+  .ts-state-authenticated { color: var(--verdigris); }
+
+  .auth-block {
+    margin-top: 14px; padding-top: 14px;
+    border-top: 1px dashed var(--rule);
+  }
+  .auth-link {
+    display: inline-block; font-weight: 600;
+    color: var(--ultramarine); text-decoration: none;
+  }
+  .auth-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+  .auth-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
+
+  /* ---- narrow ---- */
+
+  @media (max-width: 800px) {
+    .frame { grid-template-columns: 1fr; gap: 20px; padding-top: 20px; }
+    /* The rail stays two stacked sections; only the chips inside each one
+       scroll sideways, so Repository can't hide off the right edge. */
+    aside.rail { position: static; gap: 14px; }
+    .facets {
+      flex-direction: row; gap: 6px;
+      overflow-x: auto; padding-bottom: 2px;
+      scrollbar-width: none;
+    }
+    .facets::-webkit-scrollbar { display: none; }
+    .facet {
+      width: auto; flex: 0 0 auto;
+      border: 1px solid var(--rule); background: var(--plate);
+    }
+    .facet[aria-pressed="true"] { border-color: var(--ultramarine); }
+    .facet .n { margin-left: 5px; }
+    .rail-repos .facet .label { max-width: 160px; }
+  }
+  @media (max-width: 560px) {
+    .masthead-inner { flex-wrap: wrap; gap: 10px 14px; padding: 10px 16px; }
+    .search-wrap { order: 3; flex: 1 1 100%; max-width: none; }
+    .views { margin-left: auto; }
+    .frame { padding-left: 16px; padding-right: 16px; }
+    .funnel-inner { padding-left: 16px; padding-right: 16px; }
+    .plan-title { font-size: 17px; }
+    .actions { opacity: 1; }
+  }
+</style>
+</head>
+<body class="booting">
+
+<header class="masthead">
+  <div class="masthead-inner">
+    <h1 class="wordmark">plans</h1>
+    <div class="search-wrap">
+      <input type="search" id="search" placeholder="Filter by title, slug, or branch" autocomplete="off" aria-label="Filter plans">
+      <kbd>/</kbd>
+    </div>
+    <nav class="views" aria-label="Views">
+      <button id="view-plans" class="solid" aria-pressed="true">Plans</button>
+      <button id="view-trash" aria-pressed="false">Trash</button>
+      <button id="view-settings" aria-pressed="false" title="Settings">⚙ Settings</button>
+    </nav>
+  </div>
+
+  <div id="funnel" class="funnel hidden" role="status">
+    <div class="funnel-inner">
+      <span class="funnel-text" id="funnel-text"></span>
+      <button id="revoke-all">Revoke public links</button>
+    </div>
+  </div>
+</header>
+
+<div class="frame" id="frame">
+  <aside class="rail">
+    <section class="rail-status">
+      <h2 class="tag">Status</h2>
+      <div class="facets" id="status-facets"></div>
+    </section>
+    <section class="rail-repos">
+      <h2 class="tag">Repository</h2>
+      <div class="facets" id="repo-facets"></div>
+    </section>
+  </aside>
+
+  <main>
+    <section id="plans-view">
+      <div id="groups"></div>
+      <div id="plans-placeholder" class="placeholder hidden"></div>
+    </section>
+
+    <section id="trash-view" class="hidden">
+      <p class="note-line">Deleted plans keep every version. Restore puts one back in the list; purge destroys it.</p>
+      <div id="trash-rows" class="rows"></div>
+      <div id="trash-placeholder" class="placeholder hidden"></div>
+    </section>
+
+    <section id="settings-view" class="hidden">
+      <div id="restart-banner" class="notice-banner hidden" role="status">
+        Changes to the listen address or hostname take effect after a
+        restart — run <code>plans service restart</code> (or stop/start the
+        service) when convenient.
+      </div>
+
+      <div class="settings-grid">
+        <section class="settings-card" id="tailscale-card">
+          <h2 class="tag">Tailscale</h2>
+
+          <div class="toggle-row">
+            <label class="switch">
+              <input type="checkbox" id="ts-enabled">
+              <span class="switch-track"></span>
+            </label>
+            <div>
+              <span class="field-label">Enable Tailscale</span>
+              <p class="field-help">Join your tailnet for automatic HTTPS access from your other devices. Applies immediately, no restart needed.</p>
+            </div>
+          </div>
+
+          <div class="ts-status-line">
+            <span class="tag ts-badge" id="ts-status-badge"></span>
+            <span id="ts-status-detail"></span>
+          </div>
+
+          <div id="ts-auth-block" class="auth-block hidden">
+            <p class="field-help">Approve the plans node in your Tailscale admin console; this page updates automatically.</p>
+            <div class="auth-actions">
+              <a id="ts-auth-link" href="#" target="_blank" rel="noopener" class="auth-link">Authenticate this device →</a>
+              <button id="ts-auth-copy" type="button">Copy link</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-card" id="server-card">
+          <h2 class="tag">Server</h2>
+
+          <div class="field">
+            <label class="field-label" for="hostname-input">Hostname</label>
+            <input type="text" id="hostname-input" class="text-input" autocomplete="off" spellcheck="false">
+            <p class="field-help">The tailnet node name — shapes the tailnet URL (https://&lt;hostname&gt;.&lt;tailnet&gt;). Takes effect next start.</p>
+          </div>
+
+          <div class="field">
+            <label class="field-label" for="lan-listen-input">LAN listen address</label>
+            <input type="text" id="lan-listen-input" class="text-input" autocomplete="off" spellcheck="false">
+            <p class="field-help">host:port (e.g. 0.0.0.0:8080), or "off" to disable the LAN listener entirely. Always requires a restart.</p>
+          </div>
+
+          <p class="field-error hidden" id="settings-error"></p>
+
+          <div class="settings-actions">
+            <button class="solid" id="settings-save">Save</button>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

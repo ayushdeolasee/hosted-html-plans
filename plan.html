@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan — Hosted HTML Plans Service</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fafaf8;
+    --surface: #ffffff;
+    --surface-2: #f1f0ec;
+    --text: #1a1a18;
+    --text-dim: #6b6a64;
+    --accent: #2563eb;
+    --accent-soft: #eff4ff;
+    --green: #16803c;
+    --amber: #b45309;
+    --border: #e4e2dc;
+    --code-bg: #f4f3ef;
+    --shadow: 0 1px 3px rgba(0,0,0,.06), 0 4px 16px rgba(0,0,0,.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #131313;
+      --surface: #1c1c1c;
+      --surface-2: #242424;
+      --text: #e8e6e1;
+      --text-dim: #9a988f;
+      --accent: #7aa2ff;
+      --accent-soft: #1c2740;
+      --green: #4ade80;
+      --amber: #fbbf24;
+      --border: #2e2e2c;
+      --code-bg: #232322;
+      --shadow: 0 1px 3px rgba(0,0,0,.4);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-sans-serif, -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
+    line-height: 1.6;
+    font-size: 16px;
+  }
+  main { max-width: 880px; margin: 0 auto; padding: 48px 24px 96px; }
+  h1 { font-size: 2rem; letter-spacing: -0.02em; margin: 0 0 4px; }
+  .subtitle { color: var(--text-dim); margin: 0 0 32px; font-size: 1.05rem; }
+  h2 {
+    font-size: 1.35rem; letter-spacing: -0.01em;
+    margin: 56px 0 16px; padding-top: 24px;
+    border-top: 1px solid var(--border);
+  }
+  h3 { font-size: 1.05rem; margin: 28px 0 8px; }
+  p { margin: 0 0 14px; }
+  code {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.86em;
+    background: var(--code-bg);
+    padding: 2px 6px; border-radius: 5px;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    font-size: 0.82rem;
+    line-height: 1.55;
+  }
+  pre code { background: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0 24px; font-size: 0.92rem; }
+  th { text-align: left; color: var(--text-dim); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  th, td { padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  td:first-child code { white-space: nowrap; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin: 16px 0;
+    box-shadow: var(--shadow);
+  }
+  .card h3 { margin-top: 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin: 20px 0; }
+  .badge {
+    display: inline-block; font-size: 0.72rem; font-weight: 600;
+    padding: 2px 10px; border-radius: 999px; letter-spacing: 0.03em;
+    background: var(--accent-soft); color: var(--accent);
+    vertical-align: 2px; margin-left: 8px;
+  }
+  .badge.green { background: color-mix(in srgb, var(--green) 14%, transparent); color: var(--green); }
+  .badge.amber { background: color-mix(in srgb, var(--amber) 14%, transparent); color: var(--amber); }
+  .diagram {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin: 20px 0;
+    overflow-x: auto;
+  }
+  .diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.78rem; }
+  ul, ol { padding-left: 24px; margin: 0 0 16px; }
+  li { margin-bottom: 6px; }
+  .dim { color: var(--text-dim); }
+  .explain {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    border-radius: 0 10px 10px 0;
+    padding: 14px 18px;
+    margin: 18px 0;
+    font-size: 0.94rem;
+  }
+  .explain strong:first-child { color: var(--accent); }
+  .phase { display: flex; gap: 16px; margin: 14px 0; }
+  .phase-num {
+    flex: 0 0 34px; height: 34px; border-radius: 50%;
+    background: var(--accent); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 0.95rem; margin-top: 2px;
+  }
+  .phase-body h3 { margin: 4px 0 6px; }
+  .toc { columns: 2; gap: 32px; font-size: 0.92rem; margin: 0 0 8px; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  @media (max-width: 640px) { .toc { columns: 1; } }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Hosted HTML Plans — Implementation Plan</h1>
+<p class="subtitle">A single native binary — no Docker — that runs as a background service on macOS or Linux. Agents push HTML plans to it; you view them over LAN, Tailscale, or on-demand public share links, and manage them from a built-in homepage.</p>
+
+<nav class="card">
+  <h3>Contents</h3>
+  <div class="toc">
+    <div><a href="#goal">1. What we're building</a></div>
+    <div><a href="#arch">2. Architecture</a></div>
+    <div><a href="#access">3. The three access modes</a></div>
+    <div><a href="#funnel">4. On-demand public sharing</a></div>
+    <div><a href="#service">5. Running as a background service</a></div>
+    <div><a href="#stack">6. Stack decisions</a></div>
+    <div><a href="#budget">7. Resource budget</a></div>
+    <div><a href="#api">8. API design</a></div>
+    <div><a href="#homepage">9. Management homepage</a></div>
+    <div><a href="#agent">10. Agent integration</a></div>
+    <div><a href="#security">11. Security model</a></div>
+    <div><a href="#layout">12. Repo layout</a></div>
+    <div><a href="#phases">13. Build phases</a></div>
+    <div><a href="#questions">14. Open questions</a></div>
+  </div>
+</nav>
+
+<h2 id="goal">1. What we're building</h2>
+<p>One program, <code>plans</code>, that does everything:</p>
+<ul>
+  <li><strong>An HTTP server</strong> that accepts HTML files via a simple authenticated API, stores them as plain files under your home directory, and serves them back as real pages.</li>
+  <li><strong>A homepage</strong> at <code>/</code> — lists every plan with title, date, and source; open, delete, rename, search, and a per-plan share button for public links.</li>
+  <li><strong>Tailscale built in</strong> — the binary embeds Tailscale as a library (<code>tsnet</code>), so the service joins your tailnet as its own device named <code>plans</code> with automatic HTTPS. No Tailscale install required on the box, no interference with any existing Tailscale setup. The public funnel is <strong>off by default</strong> and exists only while at least one plan is explicitly shared.</li>
+  <li><strong>Self-installing service management</strong> — <code>plans service install</code> registers it with launchd (macOS) or systemd (Linux) so it starts at boot and restarts on failure.</li>
+  <li><strong>A push integration for agents</strong> — a tiny CLI script plus a Claude Code skill so any agent can run one command and get back a viewable URL.</li>
+</ul>
+<p class="dim">Dropping Docker removes the Docker daemon (easily 100+ MB of RAM by itself), the sidecar container, volumes, and compose files. Deployment becomes: copy one binary, run one install command.</p>
+
+<h2 id="arch">2. Architecture</h2>
+<div class="diagram"><pre>
+            ┌───────────────── homeserver box (or any Mac/Linux) ─────────────────┐
+            │                                                                     │
+            │   launchd / systemd supervises ──▶ ┌────────────────────────────┐   │
+            │                                    │      plans (one binary)    │   │
+ You (LAN) ────▶ 0.0.0.0:8080 ─────────────────▶│                            │   │
+            │                                    │  ┌──────────────────────┐  │   │
+ You ──────────▶ tsnet listener :443 ──────────▶ │  │ full app router      │  │   │
+ (tailnet)  │    https://plans.…ts.net           │  │ homepage · API · /p/ │  │   │
+            │                                    │  └──────────────────────┘  │   │
+ Anyone ═══════▶ tsnet FUNNEL listener :8443 ══▶ │  ┌──────────────────────┐  │   │
+ (public,   │    exists ONLY while ≥1 plan       │  │ shares-only router   │  │   │
+  via share │    is shared                       │  │ /share/&lt;token&gt; only  │  │   │
+  link)     │                                    │  └──────────────────────┘  │   │
+            │                                    └─────────────┬──────────────┘   │
+            │                                                  ▼                  │
+            │                                   ~/.local/share/plans/ (Linux)     │
+            │                                   ~/Library/Application Support/    │
+            │                                     plans/ (macOS)                  │
+            │                                      ├─ files/&lt;slug&gt;/v0001.html…    │
+            │                                      └─ index.json                  │
+            └─────────────────────────────────────────────────────────────────────┘
+</pre></div>
+
+<p>Three listeners inside one process, each mapped to an access mode:</p>
+<ul>
+  <li><strong>Plain TCP <code>:8080</code></strong> — the full app, for LAN access.</li>
+  <li><strong>tsnet <code>:443</code></strong> — the full app, tailnet-only, with automatic TLS as <code>plans.&lt;tailnet&gt;.ts.net</code>.</li>
+  <li><strong>tsnet funnel <code>:8443</code></strong> — the shares-only router. This listener is <em>created</em> when you share your first plan and <em>closed</em> when you revoke the last one. When it doesn't exist, the box has zero public exposure.</li>
+</ul>
+
+<div class="explain">
+  <strong>Concept: tsnet.</strong> Tailscale publishes its client as a Go library. Instead of talking to a Tailscale daemon on the machine, the <code>plans</code> binary <em>contains</em> one: it joins your tailnet as its own node, gets its own <code>100.x</code> address, its own name, and its own HTTPS certificate — all in-process, storing its keys in the data directory. This is how apps like Golink and Headscale-adjacent tools work. Two practical wins for us: it behaves identically on macOS and Linux, and funnel becomes a plain Go listener (<code>ListenFunnel</code>) we can open and close programmatically — which is exactly the on-demand semantics you asked for.
+</div>
+
+<h2 id="access">3. The three access modes</h2>
+<table>
+  <tr><th>Mode</th><th>URL</th><th>Who can reach it</th><th>How</th></tr>
+  <tr>
+    <td><strong>Direct IP</strong></td>
+    <td><code>http://&lt;box-LAN-ip&gt;:8080</code></td>
+    <td>Anyone on your home LAN</td>
+    <td>Ordinary TCP listener. Works with zero Tailscale setup — also the dev/fallback mode. Can be restricted to localhost or disabled in config.</td>
+  </tr>
+  <tr>
+    <td><strong>Tailnet</strong></td>
+    <td><code>https://plans.&lt;tailnet&gt;.ts.net</code></td>
+    <td>Only devices on your tailnet</td>
+    <td>Embedded tsnet node with automatic Let's Encrypt TLS. Always on once authenticated. This is the primary way you'll use it — from your Mac, phone, anywhere.</td>
+  </tr>
+  <tr>
+    <td><strong>Public share</strong> <span class="badge amber">on-demand only</span></td>
+    <td><code>https://plans.&lt;tailnet&gt;.ts.net:8443/share/&lt;token&gt;</code></td>
+    <td>Anyone with the link</td>
+    <td>Created only when you click <strong>Share</strong> on a plan: the app opens a funnel listener bound to the shares-only router, and closes it when the last share is revoked. See §4.</td>
+  </tr>
+</table>
+
+<div class="explain">
+  <strong>Concept: tailnet vs. funnel.</strong> Tailnet traffic (<code>serve</code>-style) never leaves your WireGuard mesh — only your own devices can connect. <em>Funnel</em> relays traffic from the public internet through Tailscale's edge servers to the node. Funnel only supports ports 443, 8443, and 10000; our tailnet listener owns 443, so shares go on 8443. Funnel must be permitted once for this node in your tailnet's ACL policy (<code>"funnel"</code> node attribute) — permitting it exposes nothing by itself; nothing is reachable until the app actually opens the funnel listener.
+</div>
+
+<h2 id="funnel">4. On-demand public sharing</h2>
+<p>The funnel is never a standing configuration — it's a listener whose lifetime is tied to the share button:</p>
+<ol>
+  <li><strong>Idle state (default):</strong> no funnel listener exists. The box has zero public-internet exposure; only the LAN and tailnet listeners are open.</li>
+  <li><strong>You click Share on a plan:</strong> the app generates a 128-bit random token, stores it, and calls <code>tsnet.ListenFunnel("tcp", ":8443")</code> to open the public listener (bound to the shares-only router). You get the public URL on your clipboard.</li>
+  <li><strong>More shares:</strong> the listener is already open; each share is just a new token. A visible banner on the homepage says "Public sharing active · N plans" the whole time.</li>
+  <li><strong>You revoke the last share</strong> (or delete the last shared plan): the app closes the funnel listener. Back to zero exposure.</li>
+  <li><strong>Restart resilience:</strong> on startup the app opens the funnel listener if and only if active shares exist in <code>index.json</code>.</li>
+</ol>
+<p>Because the funnel listener serves a dedicated router with exactly one route (<code>/share/&lt;token&gt;</code>), the homepage, API, and unshared plans are physically unreachable from the internet even while sharing is active.</p>
+
+<h2 id="service">5. Running as a background service</h2>
+<p>The binary manages its own installation — no hand-written unit files:</p>
+<pre><code># on the box (or any Mac/Linux machine)
+plans service install     # writes + enables launchd plist or systemd unit, starts it
+plans service status      # running? which listeners? tailnet auth state? funnel on?
+plans service uninstall   # stop + remove the service registration
+plans run                 # foreground mode, for development and debugging</code></pre>
+<table>
+  <tr><th>OS</th><th>Mechanism</th><th>Details</th></tr>
+  <tr>
+    <td>macOS</td>
+    <td>launchd <strong>LaunchAgent</strong><br><code>~/Library/LaunchAgents/com.ayushdeolasee.plans.plist</code></td>
+    <td><code>KeepAlive</code> restarts it on crash; <code>RunAtLoad</code> starts it at login. Logs to <code>~/Library/Logs/plans.log</code>.</td>
+  </tr>
+  <tr>
+    <td>Linux</td>
+    <td>systemd <strong>system unit</strong><br><code>/etc/systemd/system/plans.service</code></td>
+    <td>System-level (not <code>--user</code>) so it runs on a headless box without anyone logged in. <code>Restart=on-failure</code>; logs go to the journal (<code>journalctl -u plans</code>). Runs as your user, not root. <code>--user</code> flag available if preferred.</td>
+  </tr>
+</table>
+<h3>First-run flow</h3>
+<ol>
+  <li><code>plans service install</code> generates a config with a random API token at <code>~/.config/plans/config.json</code> and starts the service. LAN mode works immediately.</li>
+  <li>The log (and <code>plans service status</code>) prints a Tailscale auth URL once — you open it, approve the new <code>plans</code> node in your tailnet, done. tsnet stores its keys in the data dir and never asks again.</li>
+</ol>
+<h3>Paths <span class="badge">OS conventions</span></h3>
+<table>
+  <tr><th>What</th><th>Linux</th><th>macOS</th></tr>
+  <tr><td>Plans + index + tsnet state</td><td><code>~/.local/share/plans/</code></td><td><code>~/Library/Application Support/plans/</code></td></tr>
+  <tr><td>Config (port, token, hostname)</td><td colspan="2"><code>~/.config/plans/config.json</code> (both OSes — matches where <code>push-plan</code> already looks)</td></tr>
+  <tr><td>Logs</td><td>systemd journal</td><td><code>~/Library/Logs/plans.log</code></td></tr>
+</table>
+<div class="explain">
+  <strong>Concept: launchd vs. systemd.</strong> Both are the OS's init/supervisor: they start your process at boot/login, restart it if it dies, and capture its output — the same job Docker's <code>restart: unless-stopped</code> was doing, but with zero daemon overhead. launchd reads XML "plists"; systemd reads INI-style "units". Our <code>install</code> command just writes the right file for the OS it's on and loads it — the templates live in the repo so you can read exactly what gets installed.
+</div>
+
+<h2 id="stack">6. Stack decisions</h2>
+<table>
+  <tr><th>Decision</th><th>Choice</th><th>Why</th></tr>
+  <tr>
+    <td>Language / framework</td>
+    <td>Go, stdlib <code>net/http</code> — no framework</td>
+    <td>One static binary per OS/arch, cross-compiled from your Mac (<code>GOOS=linux GOARCH=amd64 go build</code>). ~0% idle CPU, instant start, and it's the only mainstream option where Tailscale embeds as a library (tsnet is Go-only) — which is what makes the no-Docker, no-sidecar design possible at all.</td>
+  </tr>
+  <tr>
+    <td>Tailscale integration</td>
+    <td>Embedded <strong>tsnet</strong> node named <code>plans</code></td>
+    <td>No dependency on host Tailscale; identical on macOS/Linux; funnel is a programmatic listener (perfect for on-demand). Alternative — reusing the host's <code>tailscaled</code> — costs less RAM but couples to host config, shares the host's node name, and behaves differently between the macOS app and Linux daemon. See §14.</td>
+  </tr>
+  <tr>
+    <td>Metadata store</td>
+    <td>One <code>index.json</code> file, mutex-guarded, atomic writes</td>
+    <td>No database engine. At personal scale (hundreds of plans, single writer) a JSON index is lighter and trivially inspectable — <code>cat index.json</code> is the admin tool.</td>
+  </tr>
+  <tr>
+    <td>HTML storage</td>
+    <td>Flat files, versioned: <code>&lt;data-dir&gt;/files/&lt;slug&gt;/v0001.html</code>, <code>v0002.html</code>…</td>
+    <td>Plans stay ordinary files in your home directory — grep them, back them up with everything else. Every edit is an immutable new version; <code>/p/&lt;slug&gt;</code> serves the latest, <code>?version=N</code> serves history (full design in <code>agent-loop.html</code>).</td>
+  </tr>
+  <tr>
+    <td>Homepage UI</td>
+    <td>One HTML template + one vanilla-JS file, compiled in via <code>go:embed</code></td>
+    <td>No build step, no node_modules, no runtime file dependencies — the binary is fully self-contained. Theme-aware, styled like this document.</td>
+  </tr>
+  <tr>
+    <td>Auth</td>
+    <td>None — open reads <em>and writes</em> on the private listeners (LAN + tailnet)</td>
+    <td>Your call: any agent or person who can reach the service can push and edit. Reachability is the auth boundary, and full version history (see <code>agent-loop.html</code>) makes every write recoverable. The public funnel listener stays read-only. No tokens to generate, store, or leak.</td>
+  </tr>
+  <tr>
+    <td>Service supervision</td>
+    <td>Native launchd / systemd via <code>plans service install</code></td>
+    <td>Replaces everything Docker was providing (start at boot, restart on crash, log capture) with the OS's own supervisor and zero extra processes.</td>
+  </tr>
+</table>
+
+<h2 id="budget">7. Resource budget</h2>
+<table>
+  <tr><th>Configuration</th><th>RAM (idle)</th><th>CPU (idle)</th><th>Disk</th></tr>
+  <tr><td><code>plans</code> with tsnet connected (normal)</td><td>~40–60 MB</td><td>≈0% (WireGuard keepalives)</td><td>one ~25 MB binary + your plans</td></tr>
+  <tr><td><code>plans</code> with Tailscale disabled in config (LAN-only)</td><td>~10 MB</td><td>≈0%</td><td>same</td></tr>
+  <tr><td colspan="4" class="dim">For comparison, the Docker design: dockerd (~100+ MB) + sidecar container (~50 MB) + app container. Going native cuts total footprint by well over half, to a single process.</td></tr>
+</table>
+<ul>
+  <li>tsnet is most of the binary size and RAM — it's a full Tailscale client. That cost buys modes 2 and 3; the HTTP server itself is a rounding error.</li>
+  <li>No background work: no polling loops, no cron, no thumbnailing, no file watchers. The process sleeps until a request arrives.</li>
+  <li>On Linux the unit sets <code>MemoryMax=128M</code> and <code>CPUQuota=50%</code> as a hard backstop, mirroring what compose limits did.</li>
+  <li>Logging is request-line only at default verbosity; macOS log file is size-capped by a built-in rotate-on-startup check.</li>
+</ul>
+
+<h2 id="api">8. API design</h2>
+<table>
+  <tr><th>Endpoint</th><th>Auth</th><th>What it does</th></tr>
+  <tr><td><code>POST /api/plans</code></td><td>—</td><td>Body = raw HTML (or multipart). Optional <code>?title=</code>, <code>?slug=</code>, <code>?agent=</code>. Title auto-extracted from <code>&lt;title&gt;</code> if not given. Returns JSON with <code>id</code>, <code>slug</code>, and ready-to-open URLs for LAN and tailnet.</td></tr>
+  <tr><td><code>GET /api/plans</code></td><td>—</td><td>List all plans with metadata (JSON). Powers the homepage and lets agents check what exists.</td></tr>
+  <tr><td><code>GET /p/{slug}</code></td><td>—</td><td>Serve the plan HTML itself.</td></tr>
+  <tr><td><code>PATCH /api/plans/{id}</code></td><td>—</td><td>Rename / edit title.</td></tr>
+  <tr><td><code>DELETE /api/plans/{id}</code></td><td>—</td><td>Archive to trash (recoverable; purge from the homepage trash view). If it was the last shared plan, the funnel listener closes as a side effect.</td></tr>
+  <tr><td><code>POST /api/plans/{id}/share</code></td><td>—</td><td>Generate a share token, <strong>open the funnel listener if it wasn't open</strong>, return the public URL.</td></tr>
+  <tr><td><code>DELETE /api/plans/{id}/share</code></td><td>—</td><td>Revoke the share (link 404s immediately); <strong>close the funnel listener if this was the last active share</strong>.</td></tr>
+  <tr><td><code>GET /share/{token}</code></td><td>—</td><td>Serve a shared plan. <strong>The only route on the funnel listener's router</strong>; also available on the private listeners.</td></tr>
+  <tr><td><code>GET /healthz</code></td><td>—</td><td>Liveness check; <code>plans service status</code> uses it.</td></tr>
+</table>
+
+<p class="dim">This is the core surface. The agent-collaboration layer adds versioned writes (<code>PUT</code>, <code>append</code>, <code>status</code>, <code>history</code>, <code>restore</code>), <code>?version=N</code> / <code>?format=text</code> views, and repo/branch filters — consolidated table in <code>agent-loop.html</code> §8.</p>
+<p>Example push (what agents will run):</p>
+<pre><code>curl -sS -X POST "https://plans.&lt;tailnet&gt;.ts.net/api/plans?title=Feature+Roadmap&amp;agent=claude" \
+  -H "Authorization: Bearer $PLANS_TOKEN" \
+  -H "Content-Type: text/html" \
+  --data-binary @roadmap.html
+
+# → { "id": "a1b2c3", "slug": "feature-roadmap",
+#     "urls": { "lan": "http://192.168.x.x:8080/p/feature-roadmap",
+#               "tailnet": "https://plans.&lt;tailnet&gt;.ts.net/p/feature-roadmap" } }</code></pre>
+
+<h2 id="homepage">9. Management homepage</h2>
+<ul>
+  <li><strong>List view</strong> — every plan as a row/card: title, slug, source agent, upload date, size. Newest first, with client-side search-as-you-type.</li>
+  <li><strong>Open</strong> — click opens the plan in a new tab (links are mode-aware: the page links to whichever host you loaded it from, so LAN links stay LAN and tailnet links stay tailnet).</li>
+  <li><strong>Delete</strong> — with a confirm step.</li>
+  <li><strong>Rename</strong> — inline title edit.</li>
+  <li><strong>Share button</strong> — per plan. One click creates the token, opens the funnel if needed, and copies the public link; a badge marks shared plans; one click revokes. A persistent banner shows whenever public sharing is active, with a "revoke all" shortcut.</li>
+  <li><strong>Copy link</strong> — copies the tailnet URL for pasting into notes/messages to yourself.</li>
+  <li>Same visual language as this document: theme-aware (light/dark via <code>prefers-color-scheme</code>), no external assets, works on your phone.</li>
+</ul>
+
+<h2 id="agent">10. Agent integration</h2>
+<p>Three layers so it works everywhere:</p>
+<ol>
+  <li><strong><code>push-plan</code> script</strong> (in the repo, symlink to <code>~/bin</code>) — <code>push-plan file.html [title]</code>: reads <code>PLANS_URL</code> from <code>~/.config/plans/config.json</code> (no token — writes are open on trusted networks), auto-tags repo + branch from the git context it runs in, pushes, prints the URLs, and copies the tailnet URL to the clipboard when run on your Mac.</li>
+  <li><strong>Claude Code skill</strong> (<code>~/.claude/skills/push-plan/</code>) — so any session can be told "push this to plans" and the model knows the exact command and where credentials live. Agents never share plans publicly — the share button is human-only by convention, and the skill says so.</li>
+  <li><strong>Global CLAUDE.md snippet</strong> — a short addition to your existing "Deliverables: HTML, not Markdown" section telling agents: after writing an HTML deliverable, push it with <code>push-plan</code> and give you the returned URL instead of (or alongside) the local path. This is what makes it automatic across all future sessions.</li>
+</ol>
+
+<h2 id="security">11. Security model <span class="badge amber">worth reading</span></h2>
+<ul>
+  <li><strong>All access — read and write — is gated by network reachability</strong> (LAN or tailnet), not credentials. Any agent or person on a trusted network can push and edit any plan; full version history makes every write recoverable, and "delete" only archives to trash. No tokens anywhere.</li>
+  <li><strong>Default public exposure is zero</strong> — not "closed" but <em>nonexistent</em>: the funnel listener isn't open. While sharing is active, the public side reaches a router whose only route is <code>/share/&lt;token&gt;</code>. Tokens are 128-bit random URL-safe strings: unguessable, individually revocable.</li>
+  <li><strong>Plan HTML is served as-is</strong> (it's your own agents' output, and plans need their inline CSS/JS to work). Shared pages get a <code>Content-Security-Policy</code> blocking external network calls as a courtesy hardening step.</li>
+  <li><strong>The service runs as your user, unprivileged</strong> — no root, no Docker socket, and ports 8080/8443 need no elevated permissions (tsnet's 443 terminates inside the tailnet, not on a host port).</li>
+  <li><strong>Caveat to flag honestly:</strong> anyone on the LAN can read plans over plain HTTP in mode 1. If the box sits on your home network, that's fine; if that ever changes, set <code>"lan_listen": "off"</code> (or <code>"127.0.0.1:8080"</code>) in config and the service becomes tailnet-only.</li>
+</ul>
+
+<h2 id="layout">12. Repo layout</h2>
+<pre><code>hosted-html-plans/
+├── cmd/plans/main.go         # CLI entry: run / service install|uninstall|status
+├── server/
+│   ├── http.go               # routers (full + shares-only), handlers
+│   ├── store.go              # index.json + file operations (atomic writes)
+│   ├── ts.go                 # tsnet node, tailnet listener, funnel open/close
+│   └── config.go             # config.json load/generate, OS-specific paths
+├── service/
+│   ├── launchd.plist.tmpl    # what `service install` writes on macOS
+│   └── systemd.service.tmpl  # what it writes on Linux
+├── ui/                       # index.html + app.js, embedded via go:embed
+├── scripts/
+│   └── push-plan             # agent/CLI push script
+├── skill/                    # Claude Code skill to install at ~/.claude/skills/
+│   └── SKILL.md
+├── Makefile                  # build + cross-compile (darwin/linux × arm64/amd64)
+├── plan.html                 # ← this document
+└── README.md                 # install + tailnet ACL checklist</code></pre>
+
+<h2 id="phases">13. Build phases</h2>
+
+<div class="phase">
+  <div class="phase-num">1</div>
+  <div class="phase-body">
+    <h3>Core server <span class="badge green">testable locally</span></h3>
+    <p class="dim">Go server: push API, JSON-index storage, plan serving, LAN listener, config + data-dir handling. Run with <code>plans run</code> on your Mac, verify end-to-end with curl.</p>
+  </div>
+</div>
+<div class="phase">
+  <div class="phase-num">2</div>
+  <div class="phase-body">
+    <h3>Management homepage</h3>
+    <p class="dim">List / open / delete / rename / search / copy-link UI (share button lands in phase 5). Verified in the browser against the local server.</p>
+  </div>
+</div>
+<div class="phase">
+  <div class="phase-num">3</div>
+  <div class="phase-body">
+    <h3>Service management + deploy <span class="badge">access mode 1</span></h3>
+    <p class="dim"><code>plans service install/uninstall/status</code> for launchd and systemd. Cross-compile, copy the binary to the box, install, confirm <code>http://&lt;box-ip&gt;:8080</code> from your Mac and that it survives a reboot. Record actual RAM/CPU against §7.</p>
+  </div>
+</div>
+<div class="phase">
+  <div class="phase-num">4</div>
+  <div class="phase-body">
+    <h3>tsnet tailnet mode <span class="badge">access mode 2</span></h3>
+    <p class="dim">Embed the tsnet node; first-run auth-URL flow (needs your hands once, ~a minute in the Tailscale admin console). Confirm <code>https://plans.&lt;tailnet&gt;.ts.net</code> from your phone off-LAN.</p>
+  </div>
+</div>
+<div class="phase">
+  <div class="phase-num">5</div>
+  <div class="phase-body">
+    <h3>On-demand funnel shares <span class="badge">access mode 3</span></h3>
+    <p class="dim">Permit funnel in your tailnet policy (one-time checklist), build the listener open/close + share button + reconcile-on-startup, then verify the full lifecycle: share → link opens from a device on neither LAN nor tailnet → revoke → link dead <em>and</em> listener confirmed closed.</p>
+  </div>
+</div>
+<div class="phase">
+  <div class="phase-num">6</div>
+  <div class="phase-body">
+    <h3>Agent integration</h3>
+    <p class="dim"><code>push-plan</code> script, the Claude Code skill, and the CLAUDE.md snippet. Final test: an agent writes a plan, pushes it, hands you a working tailnet URL.</p>
+  </div>
+</div>
+
+<h2 id="questions">14. Open questions (defaults chosen — say the word to change any)</h2>
+<table>
+  <tr><th>Question</th><th>Default I'll build</th></tr>
+  <tr><td>Embedded tsnet vs. reusing host Tailscale?</td><td><strong>tsnet</strong> — self-contained, cross-platform-identical, programmatic on-demand funnel, own <code>plans</code> node name. Host reuse would save ~40 MB RAM but couples the service to whatever Tailscale setup the box has.</td></tr>
+  <tr><td>Linux service level?</td><td><strong>System unit</strong> (runs with nobody logged in — right for a headless box); <code>--user</code> flag for the user-level alternative.</td></tr>
+  <tr><td>Retention — auto-delete old plans?</td><td><strong>Keep forever</strong>; homepage sorts by date so old ones sink. Easy to add a purge later.</td></tr>
+  <tr><td>Overwrite behavior when a slug already exists?</td><td><strong>Every write is an immutable new version at the same URL</strong> — full history, <code>?version=N</code> access, restore, and concurrent-writer handling per <code>agent-loop.html</code> §4–5.</td></tr>
+  <tr><td>Node name on the tailnet?</td><td><code>plans</code> → <code>plans.&lt;tailnet&gt;.ts.net</code></td></tr>
+</table>
+
+<p class="dim" style="margin-top:40px">Prepared 2026-07-11 · rev 3 (native binary, no Docker) · repo: <code>hosted-html-plans</code> · target: any Mac/Linux box</p>
+
+</main>
+</body>
+</html>

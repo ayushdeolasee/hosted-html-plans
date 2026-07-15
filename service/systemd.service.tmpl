@@ -1,0 +1,31 @@
+# Installed by `plans service install` (systemd).
+# See plan.html §5 for the full design. This file is rendered from
+# service/systemd.service.tmpl.
+#
+# System-level install (default): written to /etc/systemd/system/plans.service,
+# runs as the invoking user (via User=) even with nobody logged in.
+# User-level install (--user flag): written to
+# ~/.config/systemd/user/plans.service, managed with `systemctl --user`;
+# the User= line is omitted since the user unit already runs as you.
+#
+# MemoryMax/CPUQuota are the resource backstop from plan.html §7, mirroring
+# what the old Docker compose limits did.
+[Unit]
+Description=Hosted HTML Plans server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+{{- if .User}}
+User={{.User}}
+{{- end}}
+ExecStart={{.BinaryPath}} run
+Restart=on-failure
+RestartSec=5
+MemoryMax=128M
+CPUQuota=50%
+NoNewPrivileges=true
+
+[Install]
+WantedBy={{.WantedBy}}
