@@ -20,9 +20,11 @@
 # assigns a real slug on the first push.
 #
 # URL resolution, in order:
-#   1. $PLANS_URL env var
-#   2. "push_url" key in ~/.config/plans/config.json (if present)
-#   3. http://localhost:8080
+#   1. $PLANS_URL env var (explicit override; no fallback)
+#   2. "tailscale_url" in ~/.config/plans/config.json
+#   3. "lan_url" in ~/.config/plans/config.json
+#   4. legacy "push_url" in ~/.config/plans/config.json
+#   5. http://localhost:8080 when no URL is configured
 #
 # Repo + branch are auto-tagged from the git context this script runs in
 # (git remote get-url origin / git branch --show-current); both are omitted
@@ -47,9 +49,7 @@ usage:
   push-plan gc                         remove drafts with no plan on the server
 
 env:
-  PLANS_URL          override the server URL (else read from
-                      ~/.config/plans/config.json "push_url", else
-                      http://localhost:8080)
+  PLANS_URL          override all configured server URLs (no fallback)
   PLANS_DRAFT_DIR     override the draft cache directory (default
                       ${XDG_CACHE_HOME:-$HOME/.cache}/plans/drafts)
   PUSH_PLAN_AGENT     value for ?agent= (default: "cli")
@@ -290,28 +290,81 @@ if isinstance(d, list):
 
 # ---- resolve server URL -------------------------------------------------
 
-resolve_url() {
+resolve_urls() {
   if [ -n "${PLANS_URL:-}" ]; then
-    printf '%s\n' "$PLANS_URL"
+    printf '%s\n' "${PLANS_URL%/}"
     return
   fi
 
   local cfg="${PLANS_CONFIG:-$HOME/.config/plans/config.json}"
   if [ -f "$cfg" ]; then
-    local push_url
+    local tailscale_url lan_url push_url seen="" url found=0
+    tailscale_url="$(json_get_field "tailscale_url" < "$cfg")"
+    lan_url="$(json_get_field "lan_url" < "$cfg")"
     push_url="$(json_get_field "push_url" < "$cfg")"
-    if [ -n "$push_url" ]; then
-      printf '%s\n' "$push_url"
-      return
-    fi
+    for url in "$tailscale_url" "$lan_url" "$push_url"; do
+      url="${url%/}"
+      [ -n "$url" ] || continue
+      case " $seen " in
+        *" $url "*) continue ;;
+      esac
+      printf '%s\n' "$url"
+      seen="$seen $url"
+      found=1
+    done
+    [ "$found" -eq 1 ] && return
   fi
 
   printf '%s\n' "http://localhost:8080"
 }
 
-PLANS_URL_RESOLVED="$(resolve_url)"
-# strip any trailing slash
-PLANS_URL_RESOLVED="${PLANS_URL_RESOLVED%/}"
+PLANS_URL_CANDIDATES="$(resolve_urls)"
+PLANS_URL_RESOLVED=""
+HTTP_CODE=""
+CURL_EXIT=0
+
+# curl_with_fallback <path> <body-file> <error-file> <attempt-log> [curl args]
+#
+# Tries the ordered server candidates until curl can complete a request.
+# HTTP responses (including 4xx/5xx) are authoritative and never fall through
+# to another server; only DNS/TLS/connectivity failures trigger fallback.
+curl_with_fallback() {
+  local path="$1" body_file="$2" error_file="$3" attempt_log="$4"
+  shift 4
+  local old_ifs="$IFS" base_url detail
+
+  : > "$attempt_log"
+  IFS='
+'
+  for base_url in $PLANS_URL_CANDIDATES; do
+    IFS="$old_ifs"
+    : > "$body_file"
+    : > "$error_file"
+    HTTP_CODE="$(curl --connect-timeout 5 -o "$body_file" -w '%{http_code}' \
+      "$@" "${base_url}${path}" 2>"$error_file")"
+    CURL_EXIT=$?
+    if [ "$CURL_EXIT" -eq 0 ]; then
+      PLANS_URL_RESOLVED="$base_url"
+      if [ -s "$attempt_log" ]; then
+        echo "push-plan: using fallback server $PLANS_URL_RESOLVED" >&2
+      fi
+      IFS="$old_ifs"
+      return 0
+    fi
+    detail="$(tr '\n' ' ' < "$error_file" | sed 's/[[:space:]]*$//')"
+    [ -n "$detail" ] || detail="curl exited $CURL_EXIT"
+    printf '  %s -> %s\n' "$base_url" "$detail" >> "$attempt_log"
+    IFS='
+'
+  done
+  IFS="$old_ifs"
+  return 1
+}
+
+report_unreachable() { # <attempt-log>
+  echo "push-plan: could not reach any configured server:" >&2
+  cat "$1" >&2
+}
 
 # ---- git context: repo + branch -----------------------------------------
 
@@ -425,14 +478,22 @@ in_draft_dir() {
 # which would send the plan's HTML body as a query string instead of the
 # POST body. Keeping our own encoder lets --data-binary stay the body.
 urlencode() {
-  local string="$1" strlen out c
+  local string="$1" strlen out c byte i
+  # Shells count/slice characters in a UTF-8 locale, but URL encoding must
+  # operate on the underlying bytes. Without this, printf receives a whole
+  # Unicode code point (for example U+2014) and can emit a sign-extended
+  # value such as %FFFFFFFFFFFFFFE2 instead of %E2%80%94.
+  local LC_ALL=C
   strlen=${#string}
   out=""
   for (( i = 0; i < strlen; i++ )); do
     c="${string:i:1}"
     case "$c" in
       [a-zA-Z0-9.~_-]) out+="$c" ;;
-      *) out+=$(printf '%%%02X' "'$c") ;;
+      *)
+        byte=$(printf '%d' "'$c")
+        out+=$(printf '%%%02X' "$((byte & 255))")
+        ;;
     esac
   done
   printf '%s' "$out"
@@ -469,25 +530,23 @@ if [ "$SUBCMD" = "pull" ]; then
   ensure_draft_dir
   slug="$(slugify "$SLUG")"
 
-  fetch_url="${PLANS_URL_RESOLVED}/p/${slug}?format=raw"
-  [ -n "$VERSION" ] && fetch_url="${fetch_url}&version=$(urlencode "$VERSION")"
+  fetch_path="/p/${slug}?format=raw"
+  [ -n "$VERSION" ] && fetch_path="${fetch_path}&version=$(urlencode "$VERSION")"
 
   tmp_body="$(mktemp)"
-  trap 'rm -f "$tmp_body" "$tmp_body.err"' EXIT
+  trap 'rm -f "$tmp_body" "$tmp_body.err" "$tmp_body.attempts"' EXIT
 
-  http_code="$(curl -sSL -o "$tmp_body" -w '%{http_code}' "$fetch_url" 2>"$tmp_body.err")"
-  curl_exit=$?
-
-  if [ $curl_exit -ne 0 ]; then
-    echo "push-plan: could not reach server at ${PLANS_URL_RESOLVED}" >&2
-    [ -s "$tmp_body.err" ] && cat "$tmp_body.err" >&2
+  if ! curl_with_fallback "$fetch_path" "$tmp_body" "$tmp_body.err" \
+      "$tmp_body.attempts" -sSL; then
+    report_unreachable "$tmp_body.attempts"
     exit 1
   fi
 
-  case "$http_code" in
+  fetch_url="${PLANS_URL_RESOLVED}${fetch_path}"
+  case "$HTTP_CODE" in
     2??) ;;
     *)
-      echo "push-plan: server returned HTTP $http_code for $fetch_url" >&2
+      echo "push-plan: server returned HTTP $HTTP_CODE for $fetch_url" >&2
       cat "$tmp_body" >&2
       exit 1
       ;;
@@ -518,21 +577,18 @@ if [ "$SUBCMD" = "gc" ]; then
   fi
 
   tmp_body="$(mktemp)"
-  trap 'rm -f "$tmp_body" "$tmp_body.err"' EXIT
+  trap 'rm -f "$tmp_body" "$tmp_body.err" "$tmp_body.attempts"' EXIT
 
-  http_code="$(curl -sS -o "$tmp_body" -w '%{http_code}' "${PLANS_URL_RESOLVED}/api/plans" 2>"$tmp_body.err")"
-  curl_exit=$?
-
-  if [ $curl_exit -ne 0 ]; then
-    echo "push-plan: could not reach server at ${PLANS_URL_RESOLVED}" >&2
-    [ -s "$tmp_body.err" ] && cat "$tmp_body.err" >&2
+  if ! curl_with_fallback "/api/plans" "$tmp_body" "$tmp_body.err" \
+      "$tmp_body.attempts" -sS; then
+    report_unreachable "$tmp_body.attempts"
     exit 1
   fi
 
-  case "$http_code" in
+  case "$HTTP_CODE" in
     2??) ;;
     *)
-      echo "push-plan: server returned HTTP $http_code listing plans" >&2
+      echo "push-plan: server returned HTTP $HTTP_CODE listing plans" >&2
       cat "$tmp_body" >&2
       exit 1
       ;;
@@ -598,40 +654,32 @@ if [ -n "$BASE_VERSION" ]; then
     exit 1
   fi
   METHOD="PUT"
-  push_url="${PLANS_URL_RESOLVED}/api/plans/${SLUG}?${query}&base_version=$(urlencode "$BASE_VERSION")"
+  push_path="/api/plans/${SLUG}?${query}&base_version=$(urlencode "$BASE_VERSION")"
 else
   METHOD="POST"
   [ -n "$SLUG" ] && query="${query}&slug=$(urlencode "$SLUG")"
-  push_url="${PLANS_URL_RESOLVED}/api/plans?${query}"
+  push_path="/api/plans?${query}"
 fi
 
 tmp_body="$(mktemp)"
-trap 'rm -f "$tmp_body" "$tmp_body.err"' EXIT
+trap 'rm -f "$tmp_body" "$tmp_body.err" "$tmp_body.attempts"' EXIT
 
-http_code="$(curl -sS -o "$tmp_body" -w '%{http_code}' \
-  -X "$METHOD" "$push_url" \
-  -H "Content-Type: text/html" \
-  --data-binary "@${FILE}" \
-  2>"$tmp_body.err")"
-curl_exit=$?
-
-if [ $curl_exit -ne 0 ]; then
-  echo "push-plan: could not reach server at ${PLANS_URL_RESOLVED}" >&2
-  if [ -s "$tmp_body.err" ]; then
-    cat "$tmp_body.err" >&2
-  fi
-  rm -f "$tmp_body.err"
+if ! curl_with_fallback "$push_path" "$tmp_body" "$tmp_body.err" \
+    "$tmp_body.attempts" -sS -X "$METHOD" \
+    -H "Content-Type: text/html" --data-binary "@${FILE}"; then
+  report_unreachable "$tmp_body.attempts"
   exit 1
 fi
 rm -f "$tmp_body.err"
 
 resp="$(cat "$tmp_body")"
+push_url="${PLANS_URL_RESOLVED}${push_path}"
 
-case "$http_code" in
+case "$HTTP_CODE" in
   2??)
     ;;
   *)
-    echo "push-plan: server returned HTTP $http_code" >&2
+    echo "push-plan: server returned HTTP $HTTP_CODE from $PLANS_URL_RESOLVED" >&2
     echo "$resp" >&2
     exit 1
     ;;

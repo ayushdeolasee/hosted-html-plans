@@ -35,6 +35,10 @@ Detects the OS and architecture, downloads the matching binary from the
 latest GitHub release, installs it (to `/usr/local/bin` when possible), and
 registers it as a service — launchd on macOS, systemd on Linux. If no release
 asset matches the platform and Go is present, it builds from source instead.
+It also makes `plans` available on `PATH`, introduces the CLI, and guides
+first-time Tailscale authentication. Once approved, it prints the complete
+client-install command with the real tailnet URL already filled in. The
+Tailscale step can be skipped without affecting the LAN service.
 
 | Flag | Effect |
 |---|---|
@@ -59,7 +63,8 @@ available across projects.
 
 | Flag | Effect |
 |---|---|
-| `--url URL` | Record the server address as `push_url` in `~/.config/plans/config.json`. |
+| `--url URL` | Set the preferred server URL without prompting. |
+| `--lan-url URL` / `--tailscale-url URL` | Set either address without prompting. |
 | `--bin-dir DIR` | Override the `push-plan` command destination. |
 | `--agent NAME` | Skip the agent picker and target one agent; repeat for multiple agents. |
 | `--all-agents` | Install the skills for every supported agent without prompting. |
@@ -74,6 +79,25 @@ curl -fsSL $U | bash -s -- --client --skills-only --agent codex
 
 Node.js/npm is required for skill installation; `--cli-only` does not require
 it.
+
+During an interactive client install, the installer asks for two optional
+addresses:
+
+- A LAN IP or cloud-accessible URL. A raw IP or hostname becomes
+  `http://<value>:8080`.
+- A Tailscale hostname or URL. A raw hostname becomes `https://<value>`.
+
+Both are retained in `~/.config/plans/config.json` as `lan_url` and
+`tailscale_url`. The legacy `push_url` is also populated for compatibility;
+at runtime the CLI tries Tailscale first and LAN/cloud second.
+
+When a Tailscale address is configured, the client installer checks whether
+this device accepts Tailscale DNS. If it is disabled, the installer offers to
+run `tailscale set --accept-dns=true` and verifies the result. Declining leaves
+network settings untouched and prints the manual macOS path: open **Tailscale
+> Settings** and enable **Use Tailscale DNS settings**. Without that setting,
+MagicDNS names such as `plans.<tailnet>.ts.net` may not resolve, but a configured
+LAN/cloud address remains available as the fallback.
 
 ### Building it yourself
 
@@ -123,15 +147,16 @@ plans run                 # foreground mode — development/debugging only
 
 ### First-run flow
 
-1. `plans service install` generates `~/.config/plans/config.json` with
-   defaults on first run and starts the service. `http://<box-lan-ip>:8080`
-   works immediately — no further setup needed for LAN-only use.
-2. If Tailscale is enabled in config (`tailscale_enabled: true`, the
-   default), the log and `plans service status` print a Tailscale auth URL
-   the first time the embedded tsnet node needs to join your tailnet — open
-   it, approve the new `plans` node, done. tsnet stores its keys under the
-   data directory and doesn't ask again. Once authenticated, the service is
-   reachable at `https://plans.<tailnet>.ts.net` with automatic HTTPS.
+1. The server installer generates `~/.config/plans/config.json`, starts the
+   service, and makes the `plans` CLI available on `PATH`.
+   `http://<box-lan-ip>:8080` works immediately for LAN-only use.
+2. If Tailscale is enabled (the default), the installer waits for and displays
+   its one-time authentication URL. Open it and approve the new `plans` node,
+   then return to the installer. Type `s` instead to skip this step.
+3. Once authenticated, the installer reads the real tailnet FQDN and prints a
+   complete laptop command such as
+   `curl -fsSL …/install.sh | bash -s -- --client --tailscale-url https://plans.example.ts.net`.
+   tsnet keeps its keys in the data directory and does not ask again.
 
 ## One-time tailnet ACL checklist (public sharing)
 
@@ -257,9 +282,14 @@ same for the server half using your locally-built `./plans`.
 push-plan <file.html> [title] [-m "one-line note"]
 ```
 
-- **Server URL resolution**, in order: `$PLANS_URL` env var → a `push_url`
-  key in `~/.config/plans/config.json` (if you choose to set one there) →
-  `http://localhost:8080`.
+- **Server URL resolution**: `$PLANS_URL` is an explicit override. Otherwise
+  the CLI tries `tailscale_url`, then `lan_url`, then the legacy `push_url`
+  from `~/.config/plans/config.json`. It uses localhost only when no address
+  is configured.
+- **Safe fallback**: push, pull, and GC advance to the next URL only when curl
+  cannot connect. Any HTTP response is authoritative, so writes rejected with
+  409/4xx/5xx are never replayed against a second server. If every address is
+  unreachable, the error lists every attempted endpoint and its curl failure.
 - **Repo/branch auto-tagging**: reads `git remote get-url origin`
   (normalized to `host/owner/name`, no `.git`/protocol) and `git branch
   --show-current` from wherever it's run; omits both gracefully outside a

@@ -170,12 +170,20 @@ Don't try to install it yourself without asking — it writes to their
 
 ### Server URL
 
-The script resolves it: `$PLANS_URL` → the `push_url` key in
-`~/.config/plans/config.json` → `http://localhost:8080`. If a push fails
-with "could not reach server", **do not guess at addresses or ports**. Ask
-the user for their server URL, use it via `PLANS_URL=<url> push-plan …` for
-now, and mention they can persist it by re-running the installer with
-`--url <url>`.
+The script resolves it in this order:
+
+1. `$PLANS_URL` as an explicit single-server override.
+2. `tailscale_url` from `~/.config/plans/config.json`.
+3. `lan_url` from that config.
+4. The legacy `push_url` key.
+5. `http://localhost:8080` only when nothing is configured.
+
+For push, pull, and GC, connection failure automatically advances to the next
+configured URL. HTTP responses do not: a 409, 404, 500, or other response came
+from a real server and must be handled rather than replayed elsewhere. If every
+configured server is unreachable, the CLI reports each attempted endpoint.
+Do not guess another address; ask the user to rerun the installer or use
+`PLANS_URL=<url> push-plan …` as a temporary explicit override.
 
 Set `$PUSH_PLAN_AGENT` to identify yourself (e.g. `claude-code`); it
 defaults to `cli`.
