@@ -14,37 +14,98 @@ in a browser to read them properly.
 
 ## Install
 
-### Build
+There are two halves — the **server** (the box that stores and serves plans)
+and the **client** (any machine where you or an agent authors them). One
+script opens a checkbox picker where either or both can be selected:
 
 ```bash
-make build          # compiles ./plans for your current machine
+U=https://raw.githubusercontent.com/ayushdeolasee/hosted-html-plans/main/install.sh
+
+curl -fsSL $U | bash                       # interactive Server/Client picker
+curl -fsSL $U | bash -s -- --server    # on the box: binary + background service
+curl -fsSL $U | bash -s -- --client    # scripted client install
+```
+
+Neither needs a checkout. Explicit flags skip the first picker; passing both
+flags installs both sides.
+
+### `--server`
+
+Detects the OS and architecture, downloads the matching binary from the
+latest GitHub release, installs it (to `/usr/local/bin` when possible), and
+registers it as a service — launchd on macOS, systemd on Linux. If no release
+asset matches the platform and Go is present, it builds from source instead.
+
+| Flag | Effect |
+|---|---|
+| `--binary PATH` | Install this local binary instead of fetching one. |
+| `--version TAG` | Pin a release tag (default: latest). |
+| `--bin-dir DIR` | Where the binary lands. |
+| `--user` | Linux: user-level systemd unit, no root needed. |
+| `--print` | Dry run — show the unit and the commands, change nothing. |
+| `--uninstall` | Stop the service, deregister it, remove the binary. |
+
+A system-level systemd unit needs root; the installer uses `sudo` when it
+has to and tells you if it can't.
+
+### `--client`
+
+Installs the `push-plan` command (to `~/.local/bin`, or `/usr/local/bin` if
+that's writable and `~/.local/bin` isn't on `PATH`), then launches
+`npx skills add` for the two agent skills. The skills CLI detects supported
+agents and lets you independently choose Claude Code, Codex, Cursor, or any
+other supported destination. The skills are installed globally so they are
+available across projects.
+
+| Flag | Effect |
+|---|---|
+| `--url URL` | Record the server address as `push_url` in `~/.config/plans/config.json`. |
+| `--bin-dir DIR` | Override the `push-plan` command destination. |
+| `--agent NAME` | Skip the agent picker and target one agent; repeat for multiple agents. |
+| `--all-agents` | Install the skills for every supported agent without prompting. |
+| `--cli-only` / `--skills-only` | Install one half. |
+| `--uninstall` | Remove the command and the skills. |
+
+For example, a Codex-only scripted skill install is:
+
+```bash
+curl -fsSL $U | bash -s -- --client --skills-only --agent codex
+```
+
+Node.js/npm is required for skill installation; `--cli-only` does not require
+it.
+
+### Building it yourself
+
+```bash
+make build           # compiles ./plans for your current machine
 make cross           # cross-compiles darwin/linux × arm64/amd64 into dist/
-make test            # go test ./...
+make test            # go test ./... (+ the generated-artifact staleness guard)
+make release TAG=v0.1.0   # cross-compile and publish a GitHub release
 ```
 
 `plans` is a single static binary (`CGO_ENABLED=0`) — copying it anywhere is
-the entire deployment step.
+the entire deployment step. `make release` is what keeps
+`install.sh --server` working: it uploads all four binaries under the exact
+names the installer looks for (`plans-<os>-<arch>`).
 
-### Deploy to a box
+To install from a checkout instead of a release — the flow when you're
+editing this repo — use the dev wrapper, which regenerates `install.sh` first
+so you're testing exactly what ships:
 
 ```bash
-make cross
-scp dist/plans-linux-amd64 <box>:~/plans      # or -darwin-arm64, etc.
-ssh <box> 'chmod +x ~/plans'
+make install                 # client half from this checkout
+make install-server          # server half, using ./plans (skips the fetch)
+make install-server ARGS=--print
 ```
 
-(`make deploy BOX=<host>` is a ready-made example target for this — edit the
-`BOX` var or pass it on the command line.)
-
-### Install as a background service
-
-On the box (or any Mac/Linux machine you want it running on):
+### Managing the service directly
 
 ```bash
-./plans service install     # writes + enables launchd (macOS) / systemd (Linux), starts it
-./plans service status      # running? which listeners? tailnet auth state? funnel on?
-./plans service uninstall   # stop + remove the service registration
-./plans run                 # foreground mode — development/debugging only
+plans service status      # running? which listeners? tailnet auth state? funnel on?
+plans service install     # what `install.sh --server` calls for you
+plans service uninstall   # stop + remove the service registration
+plans run                 # foreground mode — development/debugging only
 ```
 
 - **macOS** — installs a launchd `LaunchAgent` at
@@ -152,49 +213,43 @@ repo you (or an agent) happen to be in — nobody clones this repo to use it.
 
 ### Install (no checkout needed)
 
-```bash
-curl -fsSL <install-url>/install.sh | bash
-curl -fsSL <install-url>/install.sh | bash -s -- --url https://plans.<tailnet>.ts.net
-```
-
-`install.sh` is **self-contained**: the `push-plan` script is embedded inline,
-so the installer is a single file to host and needs no second fetch. It:
-
-- writes `push-plan` to `~/.local/bin` (or `/usr/local/bin` if that's writable
-  and `~/.local/bin` isn't on `PATH`; override with `--bin-dir DIR`),
-- prints an explicit `export PATH=...` line for the right shell rc if the
-  target dir isn't on `PATH`,
-- with `--url`, records `push_url` in `~/.config/plans/config.json` (merging
-  into any existing config) so you don't need `PLANS_URL` in every shell,
-- supports `--uninstall`.
-
-The Claude Code skill is distributed separately, the normal way:
+It arrives with the client half of the installer, alongside both skills:
 
 ```bash
-npx skills add push-plan
+U=https://raw.githubusercontent.com/ayushdeolasee/hosted-html-plans/main/install.sh
+curl -fsSL $U | bash -s -- --client
+curl -fsSL $U | bash -s -- --client --url https://plans.<tailnet>.ts.net
 ```
 
-The skill **bundles its own copy of the executable**, so an agent that has the
-skill can always fall back to `~/.claude/skills/push-plan/push-plan` even on a
-machine where the CLI was never installed on `PATH`.
+The `push-plan` command is embedded in the installer. The two skills are
+discovered from this repository by `npx skills`, which owns agent detection,
+global placement, updates, and multi-agent selection. The push-plan skill also
+bundles its own copy of the executable, so an agent can use it even where the
+standalone command did not make it onto `PATH`.
 
 ### Generated artifacts — don't hand-edit
 
-`scripts/push-plan` is the single source of truth. Both `install.sh` and
-`skill/push-plan/push-plan` are **generated** from it:
+`install.sh` and `skill/push-plan/push-plan` are **generated** from
+`scripts/push-plan` and `scripts/build-installer`. The `SKILL.md` files are
+read directly from the repository by `npx skills`:
 
 ```bash
-make installer         # regenerate both after editing scripts/push-plan
+make installer         # regenerate both
 make check-installer   # fails if they're stale (wired into `make test`)
 ```
 
+`scripts/build-installer` refuses to emit an installer whose embedded
+`push-plan` payload would collide with its heredoc delimiter, and
+syntax-checks the result with `bash -n` before writing it.
+
 ### Developing on this repo
 
-`scripts/install` (`make install`) is a convenience wrapper for when you *do*
-have the checkout: it regenerates the artifacts, runs the real `install.sh`,
-and copies both skills into `~/.claude/skills/` so you can test edits without
-publishing. `--cli-only` / `--skills-only` do one half; `URL=…` is passed
-through (`make install URL=https://plans.x.ts.net`).
+`scripts/install` (`make install`) is the wrapper for when you *do* have the
+checkout: it regenerates `install.sh` and then runs it, so what you install is
+exactly what ships — including uncommitted edits. `--cli-only` /
+`--skills-only` do one half; `URL=…` is passed through
+(`make install URL=https://plans.x.ts.net`). `make install-server` does the
+same for the server half using your locally-built `./plans`.
 
 ### Usage
 
@@ -215,10 +270,10 @@ push-plan <file.html> [title] [-m "one-line note"]
 - Clear errors on a missing file, an unreachable server, or a non-2xx
   response (prints the response body).
 
-## The two Claude Code skills
+## The two agent skills
 
-Installed as **personal skills** at `~/.claude/skills/` (available in every
-session, any repo):
+Installed globally for whichever agents the user selects in the `npx skills`
+picker:
 
 - **`push-plan`** (`skill/push-plan/SKILL.md`) — for the *authoring* side.
   Teaches the model to embed the `plan-meta` JSON block in HTML
@@ -241,8 +296,13 @@ session, any repo):
   `--archive` behavior commits a final snapshot to `docs/plans/` in the
   target repo.
 
-End users install these with `npx skills add push-plan` /
-`npx skills add implement-plan`. To test local edits from this checkout:
+End users can also install them directly with:
+
+```bash
+npx skills add ayushdeolasee/hosted-html-plans --global
+```
+
+To test local edits from this checkout:
 
 ```bash
 scripts/install --skills-only    # or `make install` to refresh the CLI too

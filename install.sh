@@ -1,88 +1,232 @@
 #!/usr/bin/env bash
-# push-plan installer — https://github.com/ayushdeolasee/hosted-html-plans
+# hosted-html-plans installer — https://github.com/ayushdeolasee/hosted-html-plans
 #
-# GENERATED FILE — do not edit. Edit scripts/push-plan and run
-# `make installer` (scripts/build-installer) to regenerate.
-#
-# Installs the `push-plan` command, which pushes an HTML deliverable (plan,
-# roadmap, report) to your hosted-html-plans server and prints back a URL.
-# No repo checkout required; the script is embedded in this installer.
-#
-# Quick start:
-#   curl -fsSL <install-url> | bash
-#   curl -fsSL <install-url> | bash -s -- --url https://plans.example.ts.net
-#
-# Options (pass after `bash -s --` when piping):
-#   --url URL       record the server URL as "push_url" in
-#                   ~/.config/plans/config.json, so you don't need $PLANS_URL
-#                   exported in every shell
-#   --bin-dir DIR   where to install (default: ~/.local/bin, or /usr/local/bin
-#                   if that's writable and ~/.local/bin isn't on PATH)
-#   --uninstall     remove the installed command
-#
-# Environment: PLANS_BIN_DIR, PLANS_URL, PLANS_CONFIG are honored as defaults.
+# GENERATED FILE — do not edit. Edit scripts/push-plan or
+# scripts/build-installer, then run `make installer` to regenerate.
 
 set -euo pipefail
 
+REPO_SLUG="ayushdeolasee/hosted-html-plans"
+INSTALL_URL="https://raw.githubusercontent.com/ayushdeolasee/hosted-html-plans/main/install.sh"
+SKILLS_SOURCE="${PLANS_SKILLS_SOURCE:-$REPO_SLUG}"
+
+MODE=""
 BIN_DIR="${PLANS_BIN_DIR:-}"
 SERVER_URL="${PLANS_URL:-}"
 CONFIG="${PLANS_CONFIG:-$HOME/.config/plans/config.json}"
+DO_CLI=1
+DO_SKILLS=1
+SKILLS_AGENTS=()
 UNINSTALL=0
+BINARY=""
+VERSION=""
+USER_UNIT=0
+PRINT_ONLY=0
+SERVER_TMP=""
+
+usage() {
+  cat <<'USAGE'
+hosted-html-plans installer
+
+  U=https://raw.githubusercontent.com/ayushdeolasee/hosted-html-plans/main/install.sh
+  curl -fsSL $U | bash -s -- --client
+  curl -fsSL $U | bash -s -- --server
+
+Modes (no flag: interactive picker in a terminal, --client otherwise)
+  --client            Install the `push-plan` command and use `npx skills` to
+                      add both agent skills (push-plan, implement-plan) wherever
+                      you author or implement plans.
+  --server            Install the `plans` binary and register it as a
+                      background service (launchd on macOS, systemd on Linux)
+                      on the box that hosts them.
+  Pass both flags to install both sides on the same machine.
+
+Client options
+  --url URL           Record the server URL as "push_url" in
+                      ~/.config/plans/config.json, so $PLANS_URL isn't needed
+                      in every shell.
+  --bin-dir DIR       Where to install push-plan (default: ~/.local/bin, or
+                      /usr/local/bin if that's writable and ~/.local/bin isn't
+                      on PATH).
+  --agent NAME         Install skills for this agent without prompting.
+                      Repeat for multiple agents (e.g. claude-code, codex).
+  --all-agents         Install skills for every agent supported by skills CLI.
+  --cli-only          Install only the shared push-plan command.
+  --skills-only       Skip the command.
+
+Server options
+  --binary PATH       Install this local binary instead of fetching one.
+  --version TAG       Release tag to fetch (default: the latest release).
+  --bin-dir DIR       Where to install plans (default: /usr/local/bin when
+                      writable or sudo is available, else ~/.local/bin).
+  --user              Linux: install a user-level systemd unit (no root)
+                      instead of a system unit.
+  --print             Dry run — show what would be written and run, change
+                      nothing.
+
+Common
+  --uninstall         Reverse the selected mode.
+  -h, --help          This text.
+
+Environment: PLANS_BIN_DIR, PLANS_URL, and PLANS_CONFIG are honored as
+defaults.
+USAGE
+}
+
+add_mode() { # <client|server>
+  case "$MODE:$1" in
+    :client|client:client) MODE="client" ;;
+    :server|server:server) MODE="server" ;;
+    client:server|server:client|both:*) MODE="both" ;;
+  esac
+}
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --url)       SERVER_URL="${2:?--url needs a URL}"; shift 2 ;;
-    --bin-dir)   BIN_DIR="${2:?--bin-dir needs a directory}"; shift 2 ;;
-    --uninstall) UNINSTALL=1; shift ;;
-    -h|--help)
-      sed -n '2,26p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'
-      exit 0 ;;
-    *) echo "install: unknown option: $1" >&2; exit 1 ;;
+    --client)      add_mode "client"; shift ;;
+    --server)      add_mode "server"; shift ;;
+    --url)         SERVER_URL="${2:?--url needs a URL}"; shift 2 ;;
+    --bin-dir)     BIN_DIR="${2:?--bin-dir needs a directory}"; shift 2 ;;
+    --agent)       SKILLS_AGENTS+=("${2:?--agent needs a name}"); shift 2 ;;
+    --all-agents)  SKILLS_AGENTS=("*"); shift ;;
+    --cli-only)    DO_SKILLS=0; shift ;;
+    --skills-only) DO_CLI=0; shift ;;
+    --binary)      BINARY="${2:?--binary needs a path}"; shift 2 ;;
+    --version)     VERSION="${2:?--version needs a tag}"; shift 2 ;;
+    --user)        USER_UNIT=1; shift ;;
+    --print)       PRINT_ONLY=1; shift ;;
+    --uninstall)   UNINSTALL=1; shift ;;
+    -h|--help)     usage; exit 0 ;;
+    *) echo "install: unknown option: $1" >&2; echo "try: --help" >&2; exit 1 ;;
   esac
 done
+
+die() { echo "install: $*" >&2; exit 1; }
 
 on_path() {
   case ":${PATH}:" in *":$1:"*) return 0 ;; *) return 1 ;; esac
 }
 
-# Pick an install dir: an explicit choice wins; otherwise prefer ~/.local/bin
-# (the modern default, no sudo), falling back to /usr/local/bin only when it
-# is writable and ~/.local/bin isn't already on PATH.
-if [ -z "$BIN_DIR" ]; then
-  if on_path "$HOME/.local/bin" || [ ! -w /usr/local/bin ]; then
-    BIN_DIR="$HOME/.local/bin"
-  else
-    BIN_DIR="/usr/local/bin"
+need_curl() {
+  command -v curl >/dev/null 2>&1 || die "curl is required"
+}
+
+cleanup_server_tmp() {
+  if [ -n "${SERVER_TMP:-}" ] && [ -d "$SERVER_TMP" ]; then
+    rm -rf -- "$SERVER_TMP"
   fi
-fi
+  SERVER_TMP=""
+}
 
-TARGET="$BIN_DIR/push-plan"
+draw_mode_picker() { # <cursor> <server-selected> <client-selected> <message>
+  local cursor="$1" server_selected="$2" client_selected="$3" message="$4"
+  local reset="" bold="" dim="" cyan="" green="" red=""
+  local server_cursor=" " client_cursor=" " server_box="[ ]" client_box="[ ]"
 
-if [ "$UNINSTALL" -eq 1 ]; then
-  if [ -e "$TARGET" ]; then
-    rm -f "$TARGET"
-    echo "removed  $TARGET"
-  else
-    echo "nothing to remove at $TARGET"
+  if [ "${TERM:-dumb}" != "dumb" ]; then
+    reset="$(printf '\033[0m')"
+    bold="$(printf '\033[1m')"
+    dim="$(printf '\033[2m')"
+    cyan="$(printf '\033[36m')"
+    green="$(printf '\033[32m')"
+    red="$(printf '\033[31m')"
+    printf '\033[2J\033[H' >&3
   fi
-  exit 0
-fi
 
-if ! command -v curl >/dev/null 2>&1; then
-  echo "install: curl is required (push-plan uses it to talk to the server)" >&2
-  exit 1
-fi
+  [ "$cursor" -eq 0 ] && server_cursor="${cyan}>${reset}"
+  [ "$cursor" -eq 1 ] && client_cursor="${cyan}>${reset}"
+  [ "$server_selected" -eq 1 ] && server_box="${green}[x]${reset}"
+  [ "$client_selected" -eq 1 ] && client_box="${green}[x]${reset}"
 
-mkdir -p "$BIN_DIR"
+  printf '%s\n' "${bold}hosted-html-plans${reset}" >&3
+  printf '%s\n\n' "${dim}Choose what to install on this machine${reset}" >&3
+  printf '  %s %s %sServer%s\n' "$server_cursor" "$server_box" "$bold" "$reset" >&3
+  printf '      %sHosts and serves your plans as a background service.%s\n\n' "$dim" "$reset" >&3
+  printf '  %s %s %sClient%s\n' "$client_cursor" "$client_box" "$bold" "$reset" >&3
+  printf '      %sAdds push-plan, then lets you choose agents via npx skills.%s\n\n' "$dim" "$reset" >&3
+  printf '  %s↑/↓%s move   %sspace%s select   %senter%s install   %sq%s quit\n' \
+    "$cyan" "$reset" "$cyan" "$reset" "$cyan" "$reset" "$cyan" "$reset" >&3
+  if [ -n "$message" ]; then
+    printf '\n  %s%s%s\n' "$red" "$message" "$reset" >&3
+  fi
+}
 
-# Remove any existing entry first. Critical: if $TARGET is a symlink (e.g. an
-# older dev install that linked into a checkout), a plain `cat >` would follow
-# it and overwrite the link's target instead of replacing the link.
-rm -f "$TARGET"
+choose_modes() {
+  local cursor=0 server_selected=0 client_selected=0 key="" rest="" message=""
 
-# ---- the push-plan script, embedded ----------------------------------------
+  # Read from the controlling terminal rather than stdin. This keeps the UI
+  # interactive when the installer itself arrived through `curl | bash`.
+  if ! { exec 3<>/dev/tty; } 2>/dev/null || [ ! -t 3 ]; then
+    MODE="client"
+    return
+  fi
+  trap 'printf "\033[0m\n" >&3; exit 130' INT TERM
+  while :; do
+    draw_mode_picker "$cursor" "$server_selected" "$client_selected" "$message"
+    key=""
+    IFS= read -rsn1 key <&3 || {
+      printf '\033[0m\n' >&3
+      exit 1
+    }
+    message=""
+    case "$key" in
+      " ")
+        if [ "$cursor" -eq 0 ]; then
+          server_selected=$((1 - server_selected))
+        else
+          client_selected=$((1 - client_selected))
+        fi
+        ;;
+      "")
+        if [ "$server_selected" -eq 0 ] && [ "$client_selected" -eq 0 ]; then
+          message="Select at least one option."
+          continue
+        fi
+        if [ "$server_selected" -eq 1 ] && [ "$client_selected" -eq 1 ]; then
+          MODE="both"
+        elif [ "$server_selected" -eq 1 ]; then
+          MODE="server"
+        else
+          MODE="client"
+        fi
+        break
+        ;;
+      q|Q)
+        printf '\033[0m\nInstallation cancelled.\n' >&3
+        exit 0
+        ;;
+      k|K) cursor=0 ;;
+      j|J) cursor=1 ;;
+      "$(printf '\033')")
+        rest=""
+        IFS= read -rsn2 -t 1 rest <&3 || true
+        case "$rest" in
+          "[A") cursor=0 ;;
+          "[B") cursor=1 ;;
+        esac
+        ;;
+    esac
+  done
+  trap - INT TERM
+  if [ "${TERM:-dumb}" != "dumb" ]; then
+    printf '\033[2J\033[H' >&3
+  fi
+  printf 'Installing: %s\n\n' "$MODE" >&3
+  exec 3>&-
+}
 
-cat > "$TARGET" <<'PUSH_PLAN_SCRIPT_EOF__DO_NOT_EDIT'
+# Explicit mode flags keep scripted installs non-interactive. With no mode,
+# show the picker when a controlling terminal is available; headless/CI runs
+# retain the historical client default.
+[ -n "$MODE" ] || choose_modes
+
+# ---- embedded payloads -----------------------------------------------------
+#
+# Written as functions so the same heredoc can serve both the CLI install and
+# the skill's bundled copy without duplicating the script in this file.
+
+write_push_plan() { # <target>
+  cat > "$1" <<'PUSH_PLAN_SCRIPT_EOF__DO_NOT_EDIT'
 #!/usr/bin/env bash
 # push-plan — push an HTML deliverable to a hosted-html-plans server.
 #
@@ -755,13 +899,112 @@ fi
 
 exit 0
 PUSH_PLAN_SCRIPT_EOF__DO_NOT_EDIT
+  chmod +x "$1"
+}
 
-chmod +x "$TARGET"
-echo "installed  $TARGET"
 
-# ---- optionally record the server URL --------------------------------------
+# ---- client mode -----------------------------------------------------------
 
-if [ -n "$SERVER_URL" ]; then
+client_bin_dir() {
+  # An explicit choice wins; otherwise prefer ~/.local/bin (no sudo), falling
+  # back to /usr/local/bin only when it's writable and ~/.local/bin isn't
+  # already on PATH.
+  if [ -n "$BIN_DIR" ]; then
+    printf '%s' "$BIN_DIR"
+    return
+  fi
+  if on_path "$HOME/.local/bin" || [ ! -w /usr/local/bin ]; then
+    printf '%s' "$HOME/.local/bin"
+  else
+    printf '%s' "/usr/local/bin"
+  fi
+}
+
+client_uninstall() {
+  local target="$(client_bin_dir)/push-plan"
+  if [ "$DO_SKILLS" -eq 1 ]; then
+    run_skills_cli remove
+  fi
+  if [ "$DO_CLI" -eq 1 ]; then
+    if [ -e "$target" ]; then
+      rm -f "$target"
+      echo "removed    $target"
+    else
+      echo "nothing to remove at $target"
+    fi
+  fi
+}
+
+client_install_cli() {
+  local bin_dir target
+  bin_dir="$(client_bin_dir)"
+  target="$bin_dir/push-plan"
+
+  need_curl
+  mkdir -p "$bin_dir"
+
+  # Remove any existing entry first. Critical: if $target is a symlink (e.g. an
+  # older dev install that linked into a checkout), a plain `cat >` would follow
+  # it and overwrite the link's target instead of replacing the link.
+  rm -f "$target"
+  write_push_plan "$target"
+  echo "installed  $target"
+
+  if ! on_path "$bin_dir"; then
+    local rc
+    case "${SHELL:-}" in
+      */zsh)  rc="~/.zshrc" ;;
+      */bash) rc="~/.bashrc" ;;
+      *)      rc="your shell rc" ;;
+    esac
+    echo
+    echo "  !  $bin_dir is not on your PATH. Add this to $rc:"
+    echo "       export PATH=\"$bin_dir:\$PATH\""
+    echo "     then restart your shell (or run: export PATH=\"$bin_dir:\$PATH\")"
+    echo
+  fi
+}
+
+run_skills_cli() { # <add|remove>
+  command -v npx >/dev/null 2>&1 || die "npx is required to install agent skills.
+    Install Node.js/npm, or use --cli-only to install just push-plan."
+
+  local action="$1" agent
+  local args=()
+  if [ "$action" = "add" ]; then
+    args=(add "$SKILLS_SOURCE" --global --skill push-plan --skill implement-plan)
+  else
+    args=(remove push-plan implement-plan --global)
+  fi
+
+  for agent in "${SKILLS_AGENTS[@]+"${SKILLS_AGENTS[@]}"}"; do
+    args+=(--agent "$agent")
+  done
+
+  if [ "${#SKILLS_AGENTS[@]}" -gt 0 ]; then
+    # Explicit agents make this safe for scripts and CI.
+    args+=(--yes)
+    npx -y skills "${args[@]}"
+    return
+  fi
+
+  echo
+  echo "Choose which agents should receive the hosted-html-plans skills:"
+  echo
+  # The installer is commonly piped into Bash, so stdin is the script rather
+  # than the keyboard. Give the skills CLI the controlling terminal directly.
+  if ! { exec 3<>/dev/tty; } 2>/dev/null || [ ! -t 3 ]; then
+    die "agent selection needs an interactive terminal.
+    Re-run with --agent <name> (repeatable), for example:
+      --agent codex
+      --agent claude-code --agent codex"
+  fi
+  npx -y skills "${args[@]}" <&3
+  exec 3>&-
+}
+
+client_record_url() {
+  [ -n "$SERVER_URL" ] || return 0
   SERVER_URL="${SERVER_URL%/}"
   mkdir -p "$(dirname "$CONFIG")"
   if command -v python3 >/dev/null 2>&1; then
@@ -792,27 +1035,255 @@ PY
     echo "install: python3 not found and $CONFIG already exists — add" >&2
     echo "         \"push_url\": \"$SERVER_URL\" to it by hand." >&2
   fi
-fi
+}
 
-# ---- PATH check ------------------------------------------------------------
+run_client() {
+  if [ "$UNINSTALL" -eq 1 ]; then
+    client_uninstall
+    return
+  fi
+  [ "$DO_CLI" -eq 1 ] && client_install_cli
+  [ "$DO_SKILLS" -eq 1 ] && run_skills_cli add
+  client_record_url
 
-if ! on_path "$BIN_DIR"; then
-  case "${SHELL:-}" in
-    */zsh) RC="~/.zshrc" ;;
-    */bash) RC="~/.bashrc" ;;
-    *) RC="your shell rc" ;;
+  echo
+  if [ "$DO_CLI" -eq 1 ]; then
+    echo "Done. Try:  push-plan --help"
+  else
+    echo "Done. Reload your agent to make the new skills available."
+  fi
+  if [ -z "$SERVER_URL" ] && [ "$DO_CLI" -eq 1 ]; then
+    echo
+    echo "push-plan needs to know your server. Either re-run this installer with"
+    echo "  --url https://plans.<tailnet>.ts.net"
+    echo "or export PLANS_URL in your shell. Defaults to http://localhost:8080."
+  fi
+}
+
+# ---- server mode -----------------------------------------------------------
+
+detect_platform() {
+  local os arch
+  case "$(uname -s)" in
+    Darwin) os="darwin" ;;
+    Linux)  os="linux" ;;
+    *) die "unsupported OS: $(uname -s) — plans runs on macOS and Linux" ;;
   esac
-  echo
-  echo "  !  $BIN_DIR is not on your PATH. Add this to $RC:"
-  echo "       export PATH=\"$BIN_DIR:\$PATH\""
-  echo "     then restart your shell (or run: export PATH=\"$BIN_DIR:\$PATH\")"
-fi
+  case "$(uname -m)" in
+    x86_64|amd64)  arch="amd64" ;;
+    arm64|aarch64) arch="arm64" ;;
+    *) die "unsupported architecture: $(uname -m)" ;;
+  esac
+  OS="$os"
+  PLATFORM="${os}-${arch}"
+}
 
-echo
-echo "Done. Try:  push-plan --help"
-if [ -z "$SERVER_URL" ]; then
+server_bin_dir() {
+  if [ -n "$BIN_DIR" ]; then
+    printf '%s' "$BIN_DIR"
+    return
+  fi
+  # A system-level systemd unit runs as root, so the binary wants to live
+  # somewhere root can always read. Prefer /usr/local/bin when we can write
+  # there directly or via sudo; otherwise fall back to the home dir.
+  if [ -w /usr/local/bin ] || [ "$(id -u)" -eq 0 ]; then
+    printf '%s' "/usr/local/bin"
+  elif command -v sudo >/dev/null 2>&1; then
+    printf '%s' "/usr/local/bin"
+  else
+    printf '%s' "$HOME/.local/bin"
+  fi
+}
+
+# sudo_if_needed — echo "sudo" when we need it to write to <dir> (or to
+# register a system unit) and it's available. Empty otherwise.
+sudo_if_needed() { # <dir>
+  [ "$(id -u)" -eq 0 ] && return 0
+  if [ -w "$1" ] || { [ ! -e "$1" ] && [ -w "$(dirname "$1")" ]; }; then
+    return 0
+  fi
+  command -v sudo >/dev/null 2>&1 && printf 'sudo'
+}
+
+latest_release_tag() {
+  local json tag
+  json="$(curl -fsSL "https://api.github.com/repos/$REPO_SLUG/releases/latest" 2>/dev/null || true)"
+  [ -n "$json" ] || return 1
+  if command -v python3 >/dev/null 2>&1; then
+    tag="$(printf '%s' "$json" | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("tag_name",""))
+except Exception:
+    pass' 2>/dev/null || true)"
+  else
+    tag="$(printf '%s' "$json" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  fi
+  [ -n "$tag" ] || return 1
+  printf '%s' "$tag"
+}
+
+# fetch_release — download the release asset for this platform into <dest>.
+fetch_release() { # <dest>
+  local tag url
+  tag="$VERSION"
+  if [ -z "$tag" ]; then
+    tag="$(latest_release_tag)" || return 1
+  fi
+  url="https://github.com/$REPO_SLUG/releases/download/$tag/plans-$PLATFORM"
+  echo "  fetching   $url" >&2
+  curl -fsSL -o "$1" "$url" 2>/dev/null || return 1
+  [ -s "$1" ] || return 1
+  chmod +x "$1"
+  RESOLVED_FROM="release $tag"
+}
+
+# build_from_source — last resort when no release asset matches this platform.
+# Needs Go on the box; takes ~30s.
+build_from_source() { # <dest>
+  command -v go >/dev/null 2>&1 || return 1
+  local ref src_dir work
+  ref="${VERSION:-main}"
+  work="$(mktemp -d)"
+  echo "  building   from source ($ref) with $(go version | awk '{print $3}')" >&2
+  if ! curl -fsSL "https://codeload.github.com/$REPO_SLUG/tar.gz/$ref" \
+      | tar -xz -C "$work" 2>/dev/null; then
+    rm -rf "$work"
+    return 1
+  fi
+  src_dir="$(find "$work" -maxdepth 1 -mindepth 1 -type d | head -1)"
+  [ -n "$src_dir" ] || { rm -rf "$work"; return 1; }
+  if ! ( cd "$src_dir" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" \
+      -o "$1" ./cmd/plans ) >&2; then
+    rm -rf "$work"
+    return 1
+  fi
+  rm -rf "$work"
+  chmod +x "$1"
+  RESOLVED_FROM="source ($ref)"
+}
+
+resolve_binary() { # <dest>
+  if [ -n "$BINARY" ]; then
+    [ -f "$BINARY" ] || die "--binary: no such file: $BINARY"
+    cp "$BINARY" "$1"
+    chmod +x "$1"
+    RESOLVED_FROM="$BINARY"
+    return 0
+  fi
+  need_curl
+  if fetch_release "$1"; then
+    return 0
+  fi
+  echo "  note       no release asset for $PLATFORM${VERSION:+ at $VERSION} — trying source" >&2
+  if build_from_source "$1"; then
+    return 0
+  fi
+  die "could not obtain a plans binary for $PLATFORM.
+    Tried: GitHub Releases, then building from source (needs Go).
+    Fix one of those, or cross-compile on another machine and pass
+    --binary /path/to/plans-$PLATFORM"
+}
+
+server_uninstall() {
+  local bin_dir target sudo_cmd flags
+  bin_dir="$(server_bin_dir)"
+  target="$bin_dir/plans"
+  [ -x "$target" ] || target="$(command -v plans 2>/dev/null || true)"
+  [ -n "$target" ] && [ -x "$target" ] || die "no plans binary found to uninstall"
+
+  flags=""
+  [ "$USER_UNIT" -eq 1 ] && flags="-user"
+  [ "$PRINT_ONLY" -eq 1 ] && flags="$flags -print"
+
+  sudo_cmd=""
+  if [ "$OS" = "linux" ] && [ "$USER_UNIT" -eq 0 ]; then
+    sudo_cmd="$(sudo_if_needed "/etc/systemd/system")"
+  fi
+  # shellcheck disable=SC2086
+  $sudo_cmd "$target" service uninstall $flags
+
+  if [ "$PRINT_ONLY" -eq 0 ]; then
+    sudo_cmd="$(sudo_if_needed "$target")"
+    # shellcheck disable=SC2086
+    $sudo_cmd rm -f "$target" && echo "removed    $target"
+  fi
+}
+
+run_server() {
+  detect_platform
+
+  if [ "$UNINSTALL" -eq 1 ]; then
+    server_uninstall
+    return
+  fi
+
+  local bin_dir target sudo_cmd flags
+  bin_dir="$(server_bin_dir)"
+  target="$bin_dir/plans"
+
+  echo "hosted-html-plans — server install"
+  echo "  platform   $PLATFORM"
+
+  SERVER_TMP="$(mktemp -d)"
+  trap cleanup_server_tmp EXIT
+  RESOLVED_FROM=""
+  resolve_binary "$SERVER_TMP/plans"
+  echo "  source     $RESOLVED_FROM"
+
+  if [ "$PRINT_ONLY" -eq 1 ]; then
+    echo "  would install to $target, then run: $target service install"
+    echo "  (the ExecStart below names the staging copy, since nothing has been"
+    echo "   installed yet — a real run records $target)"
+    echo
+    "$SERVER_TMP/plans" service install -print
+    cleanup_server_tmp
+    trap - EXIT
+    return
+  fi
+
+  sudo_cmd="$(sudo_if_needed "$bin_dir")"
+  # shellcheck disable=SC2086
+  $sudo_cmd mkdir -p "$bin_dir"
+  # shellcheck disable=SC2086
+  $sudo_cmd install -m 0755 "$SERVER_TMP/plans" "$target"
+  echo "  installed  $target"
+
+  # Register the service using the installed path, not the temp one — the unit
+  # records whatever binary invokes it (os.Executable), so running the temp
+  # copy would write an ExecStart that disappears when this script exits.
+  flags=""
+  [ "$USER_UNIT" -eq 1 ] && flags="-user"
+
+  sudo_cmd=""
+  if [ "$OS" = "linux" ] && [ "$USER_UNIT" -eq 0 ]; then
+    sudo_cmd="$(sudo_if_needed "/etc/systemd/system")"
+    if [ -z "$sudo_cmd" ] && [ "$(id -u)" -ne 0 ]; then
+      die "a system-level systemd unit needs root, and sudo isn't available.
+    Re-run as root, or use --user for a user-level unit."
+    fi
+  fi
+  # shellcheck disable=SC2086
+  $sudo_cmd "$target" service install $flags
+
+  cleanup_server_tmp
+  trap - EXIT
+
   echo
-  echo "push-plan needs to know your server. Either re-run this installer with"
-  echo "  --url https://plans.<tailnet>.ts.net"
-  echo "or export PLANS_URL in your shell. Defaults to http://localhost:8080."
-fi
+  echo "Next:"
+  echo "  1. $target service status     # listeners, tailnet auth state, health"
+  echo "  2. Open the Tailscale auth URL it prints to approve the 'plans' node."
+  echo "  3. On your laptop:  curl -fsSL $INSTALL_URL | bash -s -- --client --url https://plans.<tailnet>.ts.net"
+}
+
+# ---- dispatch --------------------------------------------------------------
+
+case "$MODE" in
+  client) run_client ;;
+  server) run_server ;;
+  both)
+    run_server
+    echo
+    run_client
+    ;;
+  *) die "unknown mode: $MODE" ;;
+esac

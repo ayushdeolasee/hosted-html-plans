@@ -1,54 +1,50 @@
 #!/usr/bin/env bash
 # install — developer convenience wrapper (you have the repo checked out).
 #
-# End users do NOT use this file. They either:
-#   curl -fsSL <install-url> | bash          # installs the push-plan command
-#   npx skills add push-plan                 # installs the Claude Code skill
+# End users do NOT use this file. They run the generated installer directly:
+#   U=https://raw.githubusercontent.com/ayushdeolasee/hosted-html-plans/main/install.sh
+#   curl -fsSL $U | bash -s -- --client    # push-plan + agent skill picker
+#   curl -fsSL $U | bash -s -- --server    # the plans service
 #
-# This wrapper just runs the generated installer against your working copy and
-# additionally links the skills into ~/.claude/skills so you can test edits
-# without publishing.
+# This wrapper regenerates install.sh from your working copy first, then runs
+# it — so what you install is exactly what ships, including any uncommitted
+# edits to scripts/push-plan or either SKILL.md.
 #
 # Usage:
 #   scripts/install [--url URL] [--skills-only] [--cli-only]
+#   scripts/install --server [--binary PATH] [--print] [...]
+#
+# Any other flags are passed straight through to install.sh.
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SKILLS_DIR="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
 
-URL=""
-DO_CLI=1
-DO_SKILLS=1
+ARGS=()
+MODE=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --url)         URL="${2:?--url needs a URL}"; shift 2 ;;
-    --skills-only) DO_CLI=0; shift ;;
-    --cli-only)    DO_SKILLS=0; shift ;;
-    -h|--help)     sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) echo "install: unknown option: $1" >&2; exit 1 ;;
+    --url)     ARGS+=(--url "${2:?--url needs a URL}"); shift 2 ;;
+    --client)  MODE="client"; shift ;;
+    --server)  MODE="server"; shift ;;
+    -h|--help) sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *)         ARGS+=("$1"); shift ;;
   esac
 done
 
-# Always regenerate first so we're testing exactly what ships.
+# Always regenerate first so we're testing exactly what ships. When the server
+# half is requested, install the binary we just built from this checkout rather
+# than fetching a release — the whole point of the dev wrapper is local edits.
 "$ROOT/scripts/build-installer" >/dev/null
+export PLANS_SKILLS_SOURCE="$ROOT"
 
-if [ "$DO_CLI" -eq 1 ]; then
-  if [ -n "$URL" ]; then
-    bash "$ROOT/install.sh" --url "$URL"
-  else
-    bash "$ROOT/install.sh"
+if [ "$MODE" = "server" ]; then
+  if [ ! -x "$ROOT/plans" ]; then
+    echo "install: no ./plans binary — run 'make build' first" >&2
+    exit 1
   fi
+  exec bash "$ROOT/install.sh" --server --binary "$ROOT/plans" "${ARGS[@]+"${ARGS[@]}"}"
 fi
 
-if [ "$DO_SKILLS" -eq 1 ]; then
-  mkdir -p "$SKILLS_DIR"
-  for skill in push-plan implement-plan; do
-    [ -d "$ROOT/skill/$skill" ] || continue
-    rm -rf "${SKILLS_DIR:?}/$skill"
-    cp -R "$ROOT/skill/$skill" "$SKILLS_DIR/$skill"
-    [ -f "$SKILLS_DIR/$skill/push-plan" ] && chmod +x "$SKILLS_DIR/$skill/push-plan"
-    echo "installed  $SKILLS_DIR/$skill"
-  done
-fi
+exec bash "$ROOT/install.sh" --client "${ARGS[@]+"${ARGS[@]}"}"
