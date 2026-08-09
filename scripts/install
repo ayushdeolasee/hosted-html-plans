@@ -8,7 +8,7 @@
 #
 # This wrapper regenerates install.sh from your working copy first, then runs
 # it — so what you install is exactly what ships, including any uncommitted
-# edits to scripts/push-plan or either SKILL.md.
+# edits to scripts/push-plan or the HTML plans SKILL.md.
 #
 # Usage:
 #   scripts/install [--url URL] [--skills-only] [--cli-only]

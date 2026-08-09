@@ -12,8 +12,8 @@ LDFLAGS := -s -w
 	install install-cli install-skills install-server \
 	darwin/arm64 darwin/amd64 linux/amd64 linux/arm64
 
-## installer: regenerate install.sh + skill/push-plan/push-plan from their
-## sources (scripts/push-plan and both SKILL.md files). Run after editing any
+## installer: regenerate install.sh + skill/html-plans/push-plan from their
+## sources (scripts/push-plan and the SKILL.md file). Run after editing either
 ## of them.
 installer:
 	@scripts/build-installer
@@ -22,7 +22,7 @@ installer:
 check-installer:
 	@scripts/build-installer --check
 
-## install: dev convenience — install push-plan + both skills from this
+## install: dev convenience — install push-plan + the HTML plans skill from this
 ## checkout. Pass URL=... to record the server address in the config, e.g.
 ## `make install URL=https://plans.<tailnet>.ts.net`. End users don't use
 ## this; they run `install.sh --client`.
@@ -33,7 +33,7 @@ install:
 install-cli:
 	@scripts/install --cli-only $(if $(URL),--url $(URL),)
 
-## install-skills: just the Claude Code skills.
+## install-skills: just the HTML plans agent skill.
 install-skills:
 	@scripts/install --skills-only
 

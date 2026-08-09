@@ -3,7 +3,7 @@
 #
 # install.sh is one file that installs either side of the system:
 #
-#   --client   the `push-plan` command + both Claude Code skills
+#   --client   the `push-plan` command + the HTML plans agent skill
 #   --server   the `plans` binary + its launchd/systemd service
 #   (no flag)  in a terminal, an interactive menu to pick either or both;
 #              non-interactive runs keep the historical --client default
@@ -16,7 +16,7 @@
 # Sources of truth, never hand-edit the artifacts generated from them:
 #
 #   scripts/push-plan             -> embedded in install.sh
-#                                 -> copied to skill/push-plan/push-plan
+#                                 -> copied to skill/html-plans/push-plan
 #   skill/*/SKILL.md              -> discovered by `npx skills`
 #
 # Usage:
@@ -27,15 +27,14 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="$ROOT/scripts/push-plan"
-SKILL_PP_MD="$ROOT/skill/push-plan/SKILL.md"
-SKILL_IP_MD="$ROOT/skill/implement-plan/SKILL.md"
+SKILL_MD="$ROOT/skill/html-plans/SKILL.md"
 INSTALLER="$ROOT/install.sh"
-SKILL_COPY="$ROOT/skill/push-plan/push-plan"
+SKILL_COPY="$ROOT/skill/html-plans/push-plan"
 
 CHECK=0
 [ "${1:-}" = "--check" ] && CHECK=1
 
-for f in "$SRC" "$SKILL_PP_MD" "$SKILL_IP_MD"; do
+for f in "$SRC" "$SKILL_MD"; do
   [ -f "$f" ] || { echo "build-installer: missing $f" >&2; exit 1; }
 done
 
@@ -74,6 +73,8 @@ SKILLS_SOURCE="${PLANS_SKILLS_SOURCE:-$REPO_SLUG}"
 MODE=""
 BIN_DIR="${PLANS_BIN_DIR:-}"
 SERVER_URL="${PLANS_URL:-}"
+LAN_SERVER_URL="${PLANS_LAN_URL:-}"
+TAILSCALE_SERVER_URL="${PLANS_TAILSCALE_URL:-}"
 CONFIG="${PLANS_CONFIG:-$HOME/.config/plans/config.json}"
 DO_CLI=1
 DO_SKILLS=1
@@ -95,17 +96,17 @@ hosted-html-plans installer
 
 Modes (no flag: interactive picker in a terminal, --client otherwise)
   --client            Install the `push-plan` command and use `npx skills` to
-                      add both agent skills (push-plan, implement-plan) wherever
-                      you author or implement plans.
+                      add the html-plans agent skill wherever you work with
+                      hosted HTML plans.
   --server            Install the `plans` binary and register it as a
                       background service (launchd on macOS, systemd on Linux)
                       on the box that hosts them.
   Pass both flags to install both sides on the same machine.
 
 Client options
-  --url URL           Record the server URL as "push_url" in
-                      ~/.config/plans/config.json, so $PLANS_URL isn't needed
-                      in every shell.
+  --url URL           Set the preferred server URL without prompting.
+  --lan-url URL       Set the LAN/cloud server URL without prompting.
+  --tailscale-url URL Set the Tailscale server URL without prompting.
   --bin-dir DIR       Where to install push-plan (default: ~/.local/bin, or
                       /usr/local/bin if that's writable and ~/.local/bin isn't
                       on PATH).
@@ -129,8 +130,8 @@ Common
   --uninstall         Reverse the selected mode.
   -h, --help          This text.
 
-Environment: PLANS_BIN_DIR, PLANS_URL, and PLANS_CONFIG are honored as
-defaults.
+Environment: PLANS_BIN_DIR, PLANS_URL, PLANS_LAN_URL, PLANS_TAILSCALE_URL,
+and PLANS_CONFIG are honored as defaults.
 USAGE
 }
 
@@ -146,7 +147,11 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --client)      add_mode "client"; shift ;;
     --server)      add_mode "server"; shift ;;
-    --url)         SERVER_URL="${2:?--url needs a URL}"; shift 2 ;;
+    --url|--server-url)
+                    SERVER_URL="${2:?$1 needs a URL}"; shift 2 ;;
+    --lan-url)     LAN_SERVER_URL="${2:?--lan-url needs a URL}"; shift 2 ;;
+    --tailscale-url)
+                    TAILSCALE_SERVER_URL="${2:?--tailscale-url needs a URL}"; shift 2 ;;
     --bin-dir)     BIN_DIR="${2:?--bin-dir needs a directory}"; shift 2 ;;
     --agent)       SKILLS_AGENTS+=("${2:?--agent needs a name}"); shift 2 ;;
     --all-agents)  SKILLS_AGENTS=("*"); shift ;;
@@ -177,6 +182,35 @@ cleanup_server_tmp() {
     rm -rf -- "$SERVER_TMP"
   fi
   SERVER_TMP=""
+}
+
+ensure_command_on_path() { # <bin-dir>
+  local bin_dir="$1" rc="" path_line
+  path_line="export PATH=\"$bin_dir:\$PATH\""
+
+  if on_path "$bin_dir"; then
+    return
+  fi
+
+  # This process can use the command immediately. Persist the same addition for
+  # future shells; a child installer cannot change its parent shell's PATH.
+  PATH="$bin_dir:$PATH"
+  export PATH
+  case "${SHELL:-}" in
+    */zsh)  rc="$HOME/.zshrc" ;;
+    */bash) rc="$HOME/.bashrc" ;;
+  esac
+
+  if [ -n "$rc" ]; then
+    mkdir -p "$(dirname "$rc")"
+    if [ ! -f "$rc" ] || ! grep -Fqx "$path_line" "$rc"; then
+      printf '\n# Added by hosted-html-plans installer\n%s\n' "$path_line" >> "$rc"
+      echo "  PATH       added $bin_dir to $rc"
+    fi
+  else
+    echo "  PATH       add this to your shell profile:"
+    echo "             $path_line"
+  fi
 }
 
 draw_mode_picker() { # <cursor> <server-selected> <client-selected> <message>
@@ -365,9 +399,9 @@ run_skills_cli() { # <add|remove>
   local action="$1" agent
   local args=()
   if [ "$action" = "add" ]; then
-    args=(add "$SKILLS_SOURCE" --global --skill push-plan --skill implement-plan)
+    args=(add "$SKILLS_SOURCE" --global --skill html-plans)
   else
-    args=(remove push-plan implement-plan --global)
+    args=(remove html-plans --global)
   fi
 
   for agent in "${SKILLS_AGENTS[@]+"${SKILLS_AGENTS[@]}"}"; do
@@ -382,7 +416,7 @@ run_skills_cli() { # <add|remove>
   fi
 
   echo
-  echo "Choose which agents should receive the hosted-html-plans skills:"
+  echo "Choose which agents should receive the hosted-html-plans skill:"
   echo
   # The installer is commonly piped into Bash, so stdin is the script rather
   # than the keyboard. Give the skills CLI the controlling terminal directly.
@@ -396,14 +430,185 @@ run_skills_cli() { # <add|remove>
   exec 3>&-
 }
 
-client_record_url() {
+normalize_lan_url() { # <IP, host, or URL>
+  local value="${1%/}"
+  case "$value" in
+    http://*|https://*) printf '%s' "$value" ;;
+    *:*)               printf 'http://%s' "$value" ;;
+    *)                 printf 'http://%s:8080' "$value" ;;
+  esac
+}
+
+normalize_tailscale_url() { # <FQDN or URL>
+  local value="${1%/}"
+  case "$value" in
+    http://*|https://*) printf '%s' "$value" ;;
+    *)                 printf 'https://%s' "$value" ;;
+  esac
+}
+
+tailscale_cli() {
+  if command -v tailscale >/dev/null 2>&1; then
+    command -v tailscale
+  elif [ -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ]; then
+    printf '%s' /Applications/Tailscale.app/Contents/MacOS/Tailscale
+  fi
+}
+
+tailscale_dns_state() { # <tailscale-cli>
+  local output
+  output="$("$1" dns status 2>/dev/null || true)"
+  if printf '%s\n' "$output" | grep -Eq '^Tailscale DNS:[[:space:]]*enabled'; then
+    printf '%s' enabled
+  elif printf '%s\n' "$output" | grep -Eq '^Tailscale DNS:[[:space:]]*disabled'; then
+    printf '%s' disabled
+  else
+    printf '%s' unknown
+  fi
+}
+
+print_tailscale_dns_instructions() { # <tailscale-cli-or-empty>
+  local cli="$1"
+  echo
+  echo "To make Tailscale hostnames resolve:"
+  if [ "$(uname -s)" = "Darwin" ]; then
+    echo "  Open Tailscale > Settings and enable:"
+    echo "    [x] Use Tailscale DNS settings"
+  else
+    echo "  Open this device's Tailscale DNS settings and enable Tailscale DNS."
+  fi
+  if [ -n "$cli" ]; then
+    echo "  Or run:"
+    echo "    $cli set --accept-dns=true"
+  fi
+}
+
+enable_tailscale_dns() { # <tailscale-cli>
+  local cli="$1"
+  echo
+  echo "Enabling Tailscale DNS:"
+  if [ "$(uname -s)" = "Linux" ] && [ "$(id -u)" -ne 0 ]; then
+    if ! command -v sudo >/dev/null 2>&1; then
+      echo "  sudo is required to change Tailscale DNS on this machine." >&2
+      return 1
+    fi
+    echo "  sudo $cli set --accept-dns=true"
+    sudo "$cli" set --accept-dns=true
+  else
+    echo "  $cli set --accept-dns=true"
+    "$cli" set --accept-dns=true
+  fi
+}
+
+check_tailscale_dns() {
+  local cli="" state="" answer=""
+
+  # There is nothing to resolve through MagicDNS unless this client has been
+  # configured with a Tailscale address. Also recognize a legacy --url that
+  # points directly at a ts.net hostname.
+  if [ -z "$TAILSCALE_SERVER_URL" ]; then
+    case "$SERVER_URL" in
+      *.ts.net|*.ts.net:*) ;;
+      *) return ;;
+    esac
+  fi
+
+  cli="$(tailscale_cli)"
+  if [ -z "$cli" ]; then
+    echo
+    echo "Tailscale DNS check skipped: the Tailscale CLI was not found."
+    print_tailscale_dns_instructions ""
+    return
+  fi
+
+  state="$(tailscale_dns_state "$cli")"
+  case "$state" in
+    enabled)
+      echo
+      echo "Tailscale DNS is enabled. MagicDNS hostnames can resolve on this device."
+      return
+      ;;
+    unknown)
+      echo
+      echo "The installer could not determine whether Tailscale DNS is enabled."
+      print_tailscale_dns_instructions "$cli"
+      return
+      ;;
+  esac
+
+  echo
+  echo "Tailscale DNS is disabled on this device."
+  echo "Without it, MagicDNS addresses such as plans.<tailnet>.ts.net will not resolve."
+
+  if ! { exec 3<>/dev/tty; } 2>/dev/null || [ ! -t 3 ]; then
+    print_tailscale_dns_instructions "$cli"
+    return
+  fi
+
+  printf 'Enable Tailscale DNS now? [Y/n] ' >&3
+  IFS= read -r answer <&3 || answer="n"
+  exec 3>&-
+  case "$answer" in
+    ""|y|Y|yes|Yes|YES)
+      if enable_tailscale_dns "$cli" &&
+          [ "$(tailscale_dns_state "$cli")" = "enabled" ]; then
+        echo "Tailscale DNS is now enabled."
+      else
+        echo "The installer could not enable or verify Tailscale DNS." >&2
+        print_tailscale_dns_instructions "$cli"
+      fi
+      ;;
+    *)
+      echo "Tailscale DNS was left disabled."
+      print_tailscale_dns_instructions "$cli"
+      ;;
+  esac
+}
+
+prompt_client_urls() {
+  local input=""
+  # Explicit flags/environment keep automated installs non-interactive.
+  if [ -n "$SERVER_URL" ] || [ -n "$LAN_SERVER_URL" ] || [ -n "$TAILSCALE_SERVER_URL" ]; then
+    return
+  fi
+  if ! { exec 3<>/dev/tty; } 2>/dev/null || [ ! -t 3 ]; then
+    return
+  fi
+
+  echo >&3
+  echo "Server addresses" >&3
+  echo "Enter either or both. Press Enter to leave an address unset." >&3
+  echo >&3
+  printf 'LAN/cloud IP or URL (e.g. 192.168.1.20 or https://plans.example.com): ' >&3
+  IFS= read -r input <&3 || input=""
+  if [ -n "$input" ]; then
+    LAN_SERVER_URL="$(normalize_lan_url "$input")"
+  fi
+  printf 'Tailscale hostname or URL (e.g. plans.example.ts.net): ' >&3
+  IFS= read -r input <&3 || input=""
+  if [ -n "$input" ]; then
+    TAILSCALE_SERVER_URL="$(normalize_tailscale_url "$input")"
+  fi
+  exec 3>&-
+}
+
+client_record_urls() {
+  LAN_SERVER_URL="${LAN_SERVER_URL%/}"
+  TAILSCALE_SERVER_URL="${TAILSCALE_SERVER_URL%/}"
+  if [ -z "$SERVER_URL" ]; then
+    if [ -n "$TAILSCALE_SERVER_URL" ]; then
+      SERVER_URL="$TAILSCALE_SERVER_URL"
+    else
+      SERVER_URL="$LAN_SERVER_URL"
+    fi
+  fi
   [ -n "$SERVER_URL" ] || return 0
   SERVER_URL="${SERVER_URL%/}"
   mkdir -p "$(dirname "$CONFIG")"
   if command -v python3 >/dev/null 2>&1; then
-    python3 - "$CONFIG" "$SERVER_URL" <<'PY'
+    python3 - "$CONFIG" "$SERVER_URL" "$LAN_SERVER_URL" "$TAILSCALE_SERVER_URL" <<'PY'
 import json, os, sys
-path, url = sys.argv[1], sys.argv[2]
+path, preferred, lan, tailnet = sys.argv[1:5]
 data = {}
 if os.path.exists(path):
     try:
@@ -413,7 +618,11 @@ if os.path.exists(path):
         data = {}
 if not isinstance(data, dict):
     data = {}
-data["push_url"] = url
+data["push_url"] = preferred
+if lan:
+    data["lan_url"] = lan
+if tailnet:
+    data["tailscale_url"] = tailnet
 tmp = path + ".tmp"
 with open(tmp, "w") as f:
     json.dump(data, f, indent=2)
@@ -421,8 +630,21 @@ with open(tmp, "w") as f:
 os.replace(tmp, path)
 PY
     echo "configured $CONFIG  push_url=$SERVER_URL"
+    [ -n "$LAN_SERVER_URL" ] && echo "                         lan_url=$LAN_SERVER_URL"
+    [ -n "$TAILSCALE_SERVER_URL" ] && echo "                   tailscale_url=$TAILSCALE_SERVER_URL"
   elif [ ! -e "$CONFIG" ]; then
-    printf '{\n  "push_url": "%s"\n}\n' "$SERVER_URL" > "$CONFIG"
+    if [ -n "$LAN_SERVER_URL" ] && [ -n "$TAILSCALE_SERVER_URL" ]; then
+      printf '{\n  "push_url": "%s",\n  "lan_url": "%s",\n  "tailscale_url": "%s"\n}\n' \
+        "$SERVER_URL" "$LAN_SERVER_URL" "$TAILSCALE_SERVER_URL" > "$CONFIG"
+    elif [ -n "$LAN_SERVER_URL" ]; then
+      printf '{\n  "push_url": "%s",\n  "lan_url": "%s"\n}\n' \
+        "$SERVER_URL" "$LAN_SERVER_URL" > "$CONFIG"
+    elif [ -n "$TAILSCALE_SERVER_URL" ]; then
+      printf '{\n  "push_url": "%s",\n  "tailscale_url": "%s"\n}\n' \
+        "$SERVER_URL" "$TAILSCALE_SERVER_URL" > "$CONFIG"
+    else
+      printf '{\n  "push_url": "%s"\n}\n' "$SERVER_URL" > "$CONFIG"
+    fi
     echo "configured $CONFIG  push_url=$SERVER_URL"
   else
     echo "install: python3 not found and $CONFIG already exists — add" >&2
@@ -435,9 +657,11 @@ run_client() {
     client_uninstall
     return
   fi
+  prompt_client_urls
+  check_tailscale_dns
   [ "$DO_CLI" -eq 1 ] && client_install_cli
   [ "$DO_SKILLS" -eq 1 ] && run_skills_cli add
-  client_record_url
+  client_record_urls
 
   echo
   if [ "$DO_CLI" -eq 1 ]; then
@@ -577,6 +801,112 @@ resolve_binary() { # <dest>
     --binary /path/to/plans-$PLATFORM"
 }
 
+server_status_output() { # <plans-binary> <service-flags>
+  local target="$1" flags="$2"
+  # shellcheck disable=SC2086
+  "$target" service status $flags 2>/dev/null || true
+}
+
+tailnet_value() { # <status-output> <auth-url|fqdn>
+  case "$2" in
+    auth-url)
+      printf '%s\n' "$1" |
+        sed -n 's#^Tailnet auth:.*visit \(https://[^ ]*\).*#\1#p' |
+        head -1
+      ;;
+    fqdn)
+      printf '%s\n' "$1" |
+        sed -n 's/^Tailnet auth:[[:space:]]*authenticated as \([^ ]*\).*/\1/p' |
+        head -1
+      ;;
+  esac
+}
+
+wait_for_tailnet_value() { # <plans-binary> <service-flags> <field> <seconds>
+  local target="$1" flags="$2" field="$3" limit="$4"
+  local elapsed=0 status value
+  while [ "$elapsed" -lt "$limit" ]; do
+    status="$(server_status_output "$target" "$flags")"
+    value="$(tailnet_value "$status" "$field")"
+    if [ -n "$value" ]; then
+      printf '%s' "$value"
+      return 0
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+  return 1
+}
+
+print_client_install_command() { # <server-url>
+  echo
+  echo "Install the client on your laptop with:"
+  echo
+  echo "  curl -fsSL $INSTALL_URL | bash -s -- --client --tailscale-url $1"
+}
+
+guide_tailscale_setup() { # <plans-binary> <service-flags>
+  local target="$1" flags="$2" auth_url="" fqdn="" answer=""
+
+  # Returning users may already have authenticated this tsnet node.
+  fqdn="$(wait_for_tailnet_value "$target" "$flags" fqdn 3 || true)"
+  if [ -n "$fqdn" ]; then
+    fqdn="${fqdn%.}"
+    SERVER_URL="https://$fqdn"
+    TAILSCALE_SERVER_URL="$SERVER_URL"
+    echo
+    echo "Tailscale is ready:  $SERVER_URL"
+    print_client_install_command "$SERVER_URL"
+    return
+  fi
+
+  echo
+  echo "Waiting for the Tailscale authentication URL..."
+  auth_url="$(wait_for_tailnet_value "$target" "$flags" auth-url 30 || true)"
+  if [ -z "$auth_url" ]; then
+    echo "Tailscale has not produced an authentication URL yet."
+    echo "You can check again at any time with:  plans service status"
+    return
+  fi
+
+  echo
+  echo "Tailscale needs one-time approval for the 'plans' node:"
+  echo
+  echo "  $auth_url"
+  echo
+
+  if ! { exec 3<>/dev/tty; } 2>/dev/null || [ ! -t 3 ]; then
+    echo "Open that URL to approve the node, then run:  plans service status"
+    return
+  fi
+
+  printf 'Press Enter after approving it, or type s to skip Tailscale setup: ' >&3
+  IFS= read -r answer <&3 || answer="s"
+  exec 3>&-
+  case "$answer" in
+    s|S|q|Q|n|N|cancel|Cancel)
+      echo
+      echo "Tailscale setup skipped. The LAN service remains available."
+      echo "Resume later with:  plans service status"
+      return
+      ;;
+  esac
+
+  echo
+  echo "Waiting for Tailscale to finish connecting..."
+  fqdn="$(wait_for_tailnet_value "$target" "$flags" fqdn 120 || true)"
+  if [ -z "$fqdn" ]; then
+    echo "Tailscale is still connecting. Check it with:  plans service status"
+    return
+  fi
+
+  fqdn="${fqdn%.}"
+  SERVER_URL="https://$fqdn"
+  TAILSCALE_SERVER_URL="$SERVER_URL"
+  echo "Tailscale is ready:  $SERVER_URL"
+  print_client_install_command "$SERVER_URL"
+}
+
 server_uninstall() {
   local bin_dir target sudo_cmd flags
   bin_dir="$(server_bin_dir)"
@@ -640,6 +970,13 @@ run_server() {
   # shellcheck disable=SC2086
   $sudo_cmd install -m 0755 "$SERVER_TMP/plans" "$target"
   echo "  installed  $target"
+  ensure_command_on_path "$bin_dir"
+  hash -r 2>/dev/null || true
+  echo
+  echo "CLI ready"
+  echo "  command     plans"
+  echo "  location    $target"
+  echo "  help        plans --help"
 
   # Register the service using the installed path, not the temp one — the unit
   # records whatever binary invokes it (os.Executable), so running the temp
@@ -661,11 +998,7 @@ run_server() {
   cleanup_server_tmp
   trap - EXIT
 
-  echo
-  echo "Next:"
-  echo "  1. $target service status     # listeners, tailnet auth state, health"
-  echo "  2. Open the Tailscale auth URL it prints to approve the 'plans' node."
-  echo "  3. On your laptop:  curl -fsSL $INSTALL_URL | bash -s -- --client --url https://plans.<tailnet>.ts.net"
+  guide_tailscale_setup "$target" "$flags"
 }
 
 # ---- dispatch --------------------------------------------------------------
@@ -701,7 +1034,7 @@ compare() { # <generated> <committed>
 
 if [ "$CHECK" -eq 1 ]; then
   compare "$TMP/install.sh" "$INSTALLER" || { echo "STALE: install.sh" >&2; stale=1; }
-  compare "$SRC" "$SKILL_COPY"           || { echo "STALE: skill/push-plan/push-plan" >&2; stale=1; }
+  compare "$SRC" "$SKILL_COPY"           || { echo "STALE: skill/html-plans/push-plan" >&2; stale=1; }
   if [ "$stale" -eq 1 ]; then
     echo "build-installer: generated artifacts are out of date — run 'make installer'" >&2
     exit 1

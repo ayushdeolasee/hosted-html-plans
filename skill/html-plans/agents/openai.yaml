@@ -1,0 +1,4 @@
+interface:
+  display_name: "HTML Plans"
+  short_description: "Retrieve and publish hosted HTML plans"
+  default_prompt: "Use $html-plans to retrieve or publish this hosted HTML plan."

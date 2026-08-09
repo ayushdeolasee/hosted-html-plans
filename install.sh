@@ -13,6 +13,8 @@ SKILLS_SOURCE="${PLANS_SKILLS_SOURCE:-$REPO_SLUG}"
 MODE=""
 BIN_DIR="${PLANS_BIN_DIR:-}"
 SERVER_URL="${PLANS_URL:-}"
+LAN_SERVER_URL="${PLANS_LAN_URL:-}"
+TAILSCALE_SERVER_URL="${PLANS_TAILSCALE_URL:-}"
 CONFIG="${PLANS_CONFIG:-$HOME/.config/plans/config.json}"
 DO_CLI=1
 DO_SKILLS=1
@@ -34,17 +36,17 @@ hosted-html-plans installer
 
 Modes (no flag: interactive picker in a terminal, --client otherwise)
   --client            Install the `push-plan` command and use `npx skills` to
-                      add both agent skills (push-plan, implement-plan) wherever
-                      you author or implement plans.
+                      add the html-plans agent skill wherever you work with
+                      hosted HTML plans.
   --server            Install the `plans` binary and register it as a
                       background service (launchd on macOS, systemd on Linux)
                       on the box that hosts them.
   Pass both flags to install both sides on the same machine.
 
 Client options
-  --url URL           Record the server URL as "push_url" in
-                      ~/.config/plans/config.json, so $PLANS_URL isn't needed
-                      in every shell.
+  --url URL           Set the preferred server URL without prompting.
+  --lan-url URL       Set the LAN/cloud server URL without prompting.
+  --tailscale-url URL Set the Tailscale server URL without prompting.
   --bin-dir DIR       Where to install push-plan (default: ~/.local/bin, or
                       /usr/local/bin if that's writable and ~/.local/bin isn't
                       on PATH).
@@ -68,8 +70,8 @@ Common
   --uninstall         Reverse the selected mode.
   -h, --help          This text.
 
-Environment: PLANS_BIN_DIR, PLANS_URL, and PLANS_CONFIG are honored as
-defaults.
+Environment: PLANS_BIN_DIR, PLANS_URL, PLANS_LAN_URL, PLANS_TAILSCALE_URL,
+and PLANS_CONFIG are honored as defaults.
 USAGE
 }
 
@@ -85,7 +87,11 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --client)      add_mode "client"; shift ;;
     --server)      add_mode "server"; shift ;;
-    --url)         SERVER_URL="${2:?--url needs a URL}"; shift 2 ;;
+    --url|--server-url)
+                    SERVER_URL="${2:?$1 needs a URL}"; shift 2 ;;
+    --lan-url)     LAN_SERVER_URL="${2:?--lan-url needs a URL}"; shift 2 ;;
+    --tailscale-url)
+                    TAILSCALE_SERVER_URL="${2:?--tailscale-url needs a URL}"; shift 2 ;;
     --bin-dir)     BIN_DIR="${2:?--bin-dir needs a directory}"; shift 2 ;;
     --agent)       SKILLS_AGENTS+=("${2:?--agent needs a name}"); shift 2 ;;
     --all-agents)  SKILLS_AGENTS=("*"); shift ;;
@@ -116,6 +122,35 @@ cleanup_server_tmp() {
     rm -rf -- "$SERVER_TMP"
   fi
   SERVER_TMP=""
+}
+
+ensure_command_on_path() { # <bin-dir>
+  local bin_dir="$1" rc="" path_line
+  path_line="export PATH=\"$bin_dir:\$PATH\""
+
+  if on_path "$bin_dir"; then
+    return
+  fi
+
+  # This process can use the command immediately. Persist the same addition for
+  # future shells; a child installer cannot change its parent shell's PATH.
+  PATH="$bin_dir:$PATH"
+  export PATH
+  case "${SHELL:-}" in
+    */zsh)  rc="$HOME/.zshrc" ;;
+    */bash) rc="$HOME/.bashrc" ;;
+  esac
+
+  if [ -n "$rc" ]; then
+    mkdir -p "$(dirname "$rc")"
+    if [ ! -f "$rc" ] || ! grep -Fqx "$path_line" "$rc"; then
+      printf '\n# Added by hosted-html-plans installer\n%s\n' "$path_line" >> "$rc"
+      echo "  PATH       added $bin_dir to $rc"
+    fi
+  else
+    echo "  PATH       add this to your shell profile:"
+    echo "             $path_line"
+  fi
 }
 
 draw_mode_picker() { # <cursor> <server-selected> <client-selected> <message>
@@ -233,7 +268,7 @@ write_push_plan() { # <target>
 # Usage:
 #   push-plan <file.html> [title] [-m note] [--slug S] [--base-version N]
 #   push-plan draft [slug]              print the path to write the plan HTML to
-#   push-plan pull <slug> [--version N] fetch a plan into the draft cache
+#   push-plan pull <slug|url> [--version N] fetch a plan into the draft cache
 #   push-plan gc                        drop drafts whose plan is gone server-side
 #
 # The draft cache exists so agents never litter a git worktree with plan HTML.
@@ -249,9 +284,16 @@ write_push_plan() { # <target>
 # assigns a real slug on the first push.
 #
 # URL resolution, in order:
-#   1. $PLANS_URL env var
-#   2. "push_url" key in ~/.config/plans/config.json (if present)
-#   3. http://localhost:8080
+#   1. the server in a full URL passed to `pull` (explicit; no fallback)
+#   2. $PLANS_URL env var (explicit override; no fallback)
+#   3. "tailscale_url" in ~/.config/plans/config.json
+#   4. "lan_url" in ~/.config/plans/config.json
+#   5. legacy "push_url" in ~/.config/plans/config.json
+#   6. http://localhost:8080 when no URL is configured
+#
+# `pull` accepts either a bare slug or a full plan URL. A URL pins the server
+# it names, so a configured default (which may be a *different* box) can never
+# win and silently hand back a different plan that happens to share the slug.
 #
 # Repo + branch are auto-tagged from the git context this script runs in
 # (git remote get-url origin / git branch --show-current); both are omitted
@@ -272,13 +314,13 @@ usage() {
 usage:
   push-plan <file.html> [title] [-m "note"] [--slug S] [--base-version N]
   push-plan draft [slug]               print the draft path to write HTML to
-  push-plan pull <slug> [--version N]  fetch a plan into the draft cache
+  push-plan pull <slug|url> [--version N]
+                                       fetch a plan into the draft cache; a
+                                       full URL pins the server it names
   push-plan gc                         remove drafts with no plan on the server
 
 env:
-  PLANS_URL          override the server URL (else read from
-                      ~/.config/plans/config.json "push_url", else
-                      http://localhost:8080)
+  PLANS_URL          override all configured server URLs (no fallback)
   PLANS_DRAFT_DIR     override the draft cache directory (default
                       ${XDG_CACHE_HOME:-$HOME/.cache}/plans/drafts)
   PUSH_PLAN_AGENT     value for ?agent= (default: "cli")
@@ -306,6 +348,77 @@ NOTE=""
 SLUG=""
 BASE_VERSION=""
 VERSION=""
+# Server pinned by a full URL argument. Set by split_plan_url; consulted by
+# resolve_urls ahead of everything else, and never falls back.
+PLANS_URL_PIN=""
+# Version carried in a URL's query string. Applied only when --version was not
+# given explicitly, so the flag always wins.
+URL_VERSION=""
+
+# ---- accept a plan URL wherever a slug is accepted ----------------------
+#
+# `pull` takes either a bare slug or a full URL. Splitting the URL here, in the
+# CLI, is deliberate: the alternative is every caller (a human, or an agent
+# reading SKILL.md) hand-parsing it into a slug plus a PLANS_URL= prefix, which
+# is a step that fails quietly on trailing slashes, ports, and query strings.
+#
+# Assigns the globals PLAN_SLUG, PLANS_URL_PIN (server) and URL_VERSION (from
+# ?version=). It cannot echo its result: a command substitution would run it in
+# a subshell, where those assignments — and a failing `exit` — would be lost.
+# A bare `/p/<slug>` path with no host pins nothing and resolves normally.
+PLAN_SLUG=""
+split_plan_url() {
+  local arg="$1" rest="" path="" query="" slug="" part=""
+
+  case "$arg" in
+    *://*)
+      rest="${arg#*://}"
+      case "$rest" in
+        */*) path="/${rest#*/}" ;;
+        *)   path="" ;;
+      esac
+      # Everything before the first path separator is scheme + authority.
+      PLANS_URL_PIN="${arg%"$path"}"
+      PLANS_URL_PIN="${PLANS_URL_PIN%/}"
+      ;;
+    /*)
+      path="$arg"
+      ;;
+    *)
+      # A bare slug — nothing to split.
+      PLAN_SLUG="$arg"
+      return 0
+      ;;
+  esac
+
+  case "$path" in
+    *\?*)
+      query="${path#*\?}"
+      path="${path%%\?*}"
+      ;;
+  esac
+  # Drop a fragment; browsers hand these out and the server never sees them.
+  path="${path%%#*}"
+  path="${path%/}"
+  slug="${path##*/}"
+
+  if [ -z "$slug" ]; then
+    echo "push-plan pull: could not find a plan slug in: $arg" >&2
+    exit 1
+  fi
+
+  # Pull ?version=N out of the query; ignore every other parameter.
+  local old_ifs="$IFS"
+  IFS='&'
+  for part in $query; do
+    case "$part" in
+      version=*) URL_VERSION="${part#version=}" ;;
+    esac
+  done
+  IFS="$old_ifs"
+
+  PLAN_SLUG="$slug"
+}
 
 case "$SUBCMD" in
   draft)
@@ -350,10 +463,14 @@ case "$SUBCMD" in
       esac
     done
     if [ -z "$SLUG" ]; then
-      echo "push-plan pull: missing <slug>" >&2
+      echo "push-plan pull: missing <slug|url>" >&2
       usage
       exit 1
     fi
+    split_plan_url "$SLUG"
+    SLUG="$PLAN_SLUG"
+    # An explicit --version overrides one carried in the URL.
+    [ -z "$VERSION" ] && VERSION="$URL_VERSION"
     if [ -n "$VERSION" ]; then
       case "$VERSION" in
         *[!0-9]*|0)
@@ -519,28 +636,89 @@ if isinstance(d, list):
 
 # ---- resolve server URL -------------------------------------------------
 
-resolve_url() {
+resolve_urls() {
+  # A server named in a URL argument is the most explicit signal there is: it
+  # outranks even $PLANS_URL, and emits a single candidate so there is no
+  # fallback to some other box holding a same-named plan.
+  if [ -n "$PLANS_URL_PIN" ]; then
+    printf '%s\n' "${PLANS_URL_PIN%/}"
+    return
+  fi
+
   if [ -n "${PLANS_URL:-}" ]; then
-    printf '%s\n' "$PLANS_URL"
+    printf '%s\n' "${PLANS_URL%/}"
     return
   fi
 
   local cfg="${PLANS_CONFIG:-$HOME/.config/plans/config.json}"
   if [ -f "$cfg" ]; then
-    local push_url
+    local tailscale_url lan_url push_url seen="" url found=0
+    tailscale_url="$(json_get_field "tailscale_url" < "$cfg")"
+    lan_url="$(json_get_field "lan_url" < "$cfg")"
     push_url="$(json_get_field "push_url" < "$cfg")"
-    if [ -n "$push_url" ]; then
-      printf '%s\n' "$push_url"
-      return
-    fi
+    for url in "$tailscale_url" "$lan_url" "$push_url"; do
+      url="${url%/}"
+      [ -n "$url" ] || continue
+      case " $seen " in
+        *" $url "*) continue ;;
+      esac
+      printf '%s\n' "$url"
+      seen="$seen $url"
+      found=1
+    done
+    [ "$found" -eq 1 ] && return
   fi
 
   printf '%s\n' "http://localhost:8080"
 }
 
-PLANS_URL_RESOLVED="$(resolve_url)"
-# strip any trailing slash
-PLANS_URL_RESOLVED="${PLANS_URL_RESOLVED%/}"
+PLANS_URL_CANDIDATES="$(resolve_urls)"
+PLANS_URL_RESOLVED=""
+HTTP_CODE=""
+CURL_EXIT=0
+
+# curl_with_fallback <path> <body-file> <error-file> <attempt-log> [curl args]
+#
+# Tries the ordered server candidates until curl can complete a request.
+# HTTP responses (including 4xx/5xx) are authoritative and never fall through
+# to another server; only DNS/TLS/connectivity failures trigger fallback.
+curl_with_fallback() {
+  local path="$1" body_file="$2" error_file="$3" attempt_log="$4"
+  shift 4
+  local old_ifs="$IFS" base_url detail
+
+  : > "$attempt_log"
+  IFS='
+'
+  for base_url in $PLANS_URL_CANDIDATES; do
+    IFS="$old_ifs"
+    : > "$body_file"
+    : > "$error_file"
+    HTTP_CODE="$(curl --connect-timeout 5 -o "$body_file" -w '%{http_code}' \
+      "$@" "${base_url}${path}" 2>"$error_file")"
+    CURL_EXIT=$?
+    if [ "$CURL_EXIT" -eq 0 ]; then
+      PLANS_URL_RESOLVED="$base_url"
+      if [ -s "$attempt_log" ]; then
+        echo "push-plan: using fallback server $PLANS_URL_RESOLVED" >&2
+      fi
+      IFS="$old_ifs"
+      return 0
+    fi
+    detail="$(tr '\n' ' ' < "$error_file" | sed 's/[[:space:]]*$//')"
+    [ -n "$detail" ] || detail="curl exited $CURL_EXIT"
+    printf '  %s -> %s\n' "$base_url" "$detail" >> "$attempt_log"
+    IFS='
+'
+  done
+  IFS="$old_ifs"
+  return 1
+}
+
+report_unreachable() { # <attempt-log>
+  echo "push-plan: could not reach any configured server:" >&2
+  cat "$1" >&2
+}
 
 # ---- git context: repo + branch -----------------------------------------
 
@@ -654,14 +832,22 @@ in_draft_dir() {
 # which would send the plan's HTML body as a query string instead of the
 # POST body. Keeping our own encoder lets --data-binary stay the body.
 urlencode() {
-  local string="$1" strlen out c
+  local string="$1" strlen out c byte i
+  # Shells count/slice characters in a UTF-8 locale, but URL encoding must
+  # operate on the underlying bytes. Without this, printf receives a whole
+  # Unicode code point (for example U+2014) and can emit a sign-extended
+  # value such as %FFFFFFFFFFFFFFE2 instead of %E2%80%94.
+  local LC_ALL=C
   strlen=${#string}
   out=""
   for (( i = 0; i < strlen; i++ )); do
     c="${string:i:1}"
     case "$c" in
       [a-zA-Z0-9.~_-]) out+="$c" ;;
-      *) out+=$(printf '%%%02X' "'$c") ;;
+      *)
+        byte=$(printf '%d' "'$c")
+        out+=$(printf '%%%02X' "$((byte & 255))")
+        ;;
     esac
   done
   printf '%s' "$out"
@@ -698,25 +884,23 @@ if [ "$SUBCMD" = "pull" ]; then
   ensure_draft_dir
   slug="$(slugify "$SLUG")"
 
-  fetch_url="${PLANS_URL_RESOLVED}/p/${slug}?format=raw"
-  [ -n "$VERSION" ] && fetch_url="${fetch_url}&version=$(urlencode "$VERSION")"
+  fetch_path="/p/${slug}?format=raw"
+  [ -n "$VERSION" ] && fetch_path="${fetch_path}&version=$(urlencode "$VERSION")"
 
   tmp_body="$(mktemp)"
-  trap 'rm -f "$tmp_body" "$tmp_body.err"' EXIT
+  trap 'rm -f "$tmp_body" "$tmp_body.err" "$tmp_body.attempts"' EXIT
 
-  http_code="$(curl -sSL -o "$tmp_body" -w '%{http_code}' "$fetch_url" 2>"$tmp_body.err")"
-  curl_exit=$?
-
-  if [ $curl_exit -ne 0 ]; then
-    echo "push-plan: could not reach server at ${PLANS_URL_RESOLVED}" >&2
-    [ -s "$tmp_body.err" ] && cat "$tmp_body.err" >&2
+  if ! curl_with_fallback "$fetch_path" "$tmp_body" "$tmp_body.err" \
+      "$tmp_body.attempts" -sSL; then
+    report_unreachable "$tmp_body.attempts"
     exit 1
   fi
 
-  case "$http_code" in
+  fetch_url="${PLANS_URL_RESOLVED}${fetch_path}"
+  case "$HTTP_CODE" in
     2??) ;;
     *)
-      echo "push-plan: server returned HTTP $http_code for $fetch_url" >&2
+      echo "push-plan: server returned HTTP $HTTP_CODE for $fetch_url" >&2
       cat "$tmp_body" >&2
       exit 1
       ;;
@@ -747,21 +931,18 @@ if [ "$SUBCMD" = "gc" ]; then
   fi
 
   tmp_body="$(mktemp)"
-  trap 'rm -f "$tmp_body" "$tmp_body.err"' EXIT
+  trap 'rm -f "$tmp_body" "$tmp_body.err" "$tmp_body.attempts"' EXIT
 
-  http_code="$(curl -sS -o "$tmp_body" -w '%{http_code}' "${PLANS_URL_RESOLVED}/api/plans" 2>"$tmp_body.err")"
-  curl_exit=$?
-
-  if [ $curl_exit -ne 0 ]; then
-    echo "push-plan: could not reach server at ${PLANS_URL_RESOLVED}" >&2
-    [ -s "$tmp_body.err" ] && cat "$tmp_body.err" >&2
+  if ! curl_with_fallback "/api/plans" "$tmp_body" "$tmp_body.err" \
+      "$tmp_body.attempts" -sS; then
+    report_unreachable "$tmp_body.attempts"
     exit 1
   fi
 
-  case "$http_code" in
+  case "$HTTP_CODE" in
     2??) ;;
     *)
-      echo "push-plan: server returned HTTP $http_code listing plans" >&2
+      echo "push-plan: server returned HTTP $HTTP_CODE listing plans" >&2
       cat "$tmp_body" >&2
       exit 1
       ;;
@@ -827,40 +1008,32 @@ if [ -n "$BASE_VERSION" ]; then
     exit 1
   fi
   METHOD="PUT"
-  push_url="${PLANS_URL_RESOLVED}/api/plans/${SLUG}?${query}&base_version=$(urlencode "$BASE_VERSION")"
+  push_path="/api/plans/${SLUG}?${query}&base_version=$(urlencode "$BASE_VERSION")"
 else
   METHOD="POST"
   [ -n "$SLUG" ] && query="${query}&slug=$(urlencode "$SLUG")"
-  push_url="${PLANS_URL_RESOLVED}/api/plans?${query}"
+  push_path="/api/plans?${query}"
 fi
 
 tmp_body="$(mktemp)"
-trap 'rm -f "$tmp_body" "$tmp_body.err"' EXIT
+trap 'rm -f "$tmp_body" "$tmp_body.err" "$tmp_body.attempts"' EXIT
 
-http_code="$(curl -sS -o "$tmp_body" -w '%{http_code}' \
-  -X "$METHOD" "$push_url" \
-  -H "Content-Type: text/html" \
-  --data-binary "@${FILE}" \
-  2>"$tmp_body.err")"
-curl_exit=$?
-
-if [ $curl_exit -ne 0 ]; then
-  echo "push-plan: could not reach server at ${PLANS_URL_RESOLVED}" >&2
-  if [ -s "$tmp_body.err" ]; then
-    cat "$tmp_body.err" >&2
-  fi
-  rm -f "$tmp_body.err"
+if ! curl_with_fallback "$push_path" "$tmp_body" "$tmp_body.err" \
+    "$tmp_body.attempts" -sS -X "$METHOD" \
+    -H "Content-Type: text/html" --data-binary "@${FILE}"; then
+  report_unreachable "$tmp_body.attempts"
   exit 1
 fi
 rm -f "$tmp_body.err"
 
 resp="$(cat "$tmp_body")"
+push_url="${PLANS_URL_RESOLVED}${push_path}"
 
-case "$http_code" in
+case "$HTTP_CODE" in
   2??)
     ;;
   *)
-    echo "push-plan: server returned HTTP $http_code" >&2
+    echo "push-plan: server returned HTTP $HTTP_CODE from $PLANS_URL_RESOLVED" >&2
     echo "$resp" >&2
     exit 1
     ;;
@@ -972,9 +1145,9 @@ run_skills_cli() { # <add|remove>
   local action="$1" agent
   local args=()
   if [ "$action" = "add" ]; then
-    args=(add "$SKILLS_SOURCE" --global --skill push-plan --skill implement-plan)
+    args=(add "$SKILLS_SOURCE" --global --skill html-plans)
   else
-    args=(remove push-plan implement-plan --global)
+    args=(remove html-plans --global)
   fi
 
   for agent in "${SKILLS_AGENTS[@]+"${SKILLS_AGENTS[@]}"}"; do
@@ -989,7 +1162,7 @@ run_skills_cli() { # <add|remove>
   fi
 
   echo
-  echo "Choose which agents should receive the hosted-html-plans skills:"
+  echo "Choose which agents should receive the hosted-html-plans skill:"
   echo
   # The installer is commonly piped into Bash, so stdin is the script rather
   # than the keyboard. Give the skills CLI the controlling terminal directly.
@@ -1003,14 +1176,185 @@ run_skills_cli() { # <add|remove>
   exec 3>&-
 }
 
-client_record_url() {
+normalize_lan_url() { # <IP, host, or URL>
+  local value="${1%/}"
+  case "$value" in
+    http://*|https://*) printf '%s' "$value" ;;
+    *:*)               printf 'http://%s' "$value" ;;
+    *)                 printf 'http://%s:8080' "$value" ;;
+  esac
+}
+
+normalize_tailscale_url() { # <FQDN or URL>
+  local value="${1%/}"
+  case "$value" in
+    http://*|https://*) printf '%s' "$value" ;;
+    *)                 printf 'https://%s' "$value" ;;
+  esac
+}
+
+tailscale_cli() {
+  if command -v tailscale >/dev/null 2>&1; then
+    command -v tailscale
+  elif [ -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ]; then
+    printf '%s' /Applications/Tailscale.app/Contents/MacOS/Tailscale
+  fi
+}
+
+tailscale_dns_state() { # <tailscale-cli>
+  local output
+  output="$("$1" dns status 2>/dev/null || true)"
+  if printf '%s\n' "$output" | grep -Eq '^Tailscale DNS:[[:space:]]*enabled'; then
+    printf '%s' enabled
+  elif printf '%s\n' "$output" | grep -Eq '^Tailscale DNS:[[:space:]]*disabled'; then
+    printf '%s' disabled
+  else
+    printf '%s' unknown
+  fi
+}
+
+print_tailscale_dns_instructions() { # <tailscale-cli-or-empty>
+  local cli="$1"
+  echo
+  echo "To make Tailscale hostnames resolve:"
+  if [ "$(uname -s)" = "Darwin" ]; then
+    echo "  Open Tailscale > Settings and enable:"
+    echo "    [x] Use Tailscale DNS settings"
+  else
+    echo "  Open this device's Tailscale DNS settings and enable Tailscale DNS."
+  fi
+  if [ -n "$cli" ]; then
+    echo "  Or run:"
+    echo "    $cli set --accept-dns=true"
+  fi
+}
+
+enable_tailscale_dns() { # <tailscale-cli>
+  local cli="$1"
+  echo
+  echo "Enabling Tailscale DNS:"
+  if [ "$(uname -s)" = "Linux" ] && [ "$(id -u)" -ne 0 ]; then
+    if ! command -v sudo >/dev/null 2>&1; then
+      echo "  sudo is required to change Tailscale DNS on this machine." >&2
+      return 1
+    fi
+    echo "  sudo $cli set --accept-dns=true"
+    sudo "$cli" set --accept-dns=true
+  else
+    echo "  $cli set --accept-dns=true"
+    "$cli" set --accept-dns=true
+  fi
+}
+
+check_tailscale_dns() {
+  local cli="" state="" answer=""
+
+  # There is nothing to resolve through MagicDNS unless this client has been
+  # configured with a Tailscale address. Also recognize a legacy --url that
+  # points directly at a ts.net hostname.
+  if [ -z "$TAILSCALE_SERVER_URL" ]; then
+    case "$SERVER_URL" in
+      *.ts.net|*.ts.net:*) ;;
+      *) return ;;
+    esac
+  fi
+
+  cli="$(tailscale_cli)"
+  if [ -z "$cli" ]; then
+    echo
+    echo "Tailscale DNS check skipped: the Tailscale CLI was not found."
+    print_tailscale_dns_instructions ""
+    return
+  fi
+
+  state="$(tailscale_dns_state "$cli")"
+  case "$state" in
+    enabled)
+      echo
+      echo "Tailscale DNS is enabled. MagicDNS hostnames can resolve on this device."
+      return
+      ;;
+    unknown)
+      echo
+      echo "The installer could not determine whether Tailscale DNS is enabled."
+      print_tailscale_dns_instructions "$cli"
+      return
+      ;;
+  esac
+
+  echo
+  echo "Tailscale DNS is disabled on this device."
+  echo "Without it, MagicDNS addresses such as plans.<tailnet>.ts.net will not resolve."
+
+  if ! { exec 3<>/dev/tty; } 2>/dev/null || [ ! -t 3 ]; then
+    print_tailscale_dns_instructions "$cli"
+    return
+  fi
+
+  printf 'Enable Tailscale DNS now? [Y/n] ' >&3
+  IFS= read -r answer <&3 || answer="n"
+  exec 3>&-
+  case "$answer" in
+    ""|y|Y|yes|Yes|YES)
+      if enable_tailscale_dns "$cli" &&
+          [ "$(tailscale_dns_state "$cli")" = "enabled" ]; then
+        echo "Tailscale DNS is now enabled."
+      else
+        echo "The installer could not enable or verify Tailscale DNS." >&2
+        print_tailscale_dns_instructions "$cli"
+      fi
+      ;;
+    *)
+      echo "Tailscale DNS was left disabled."
+      print_tailscale_dns_instructions "$cli"
+      ;;
+  esac
+}
+
+prompt_client_urls() {
+  local input=""
+  # Explicit flags/environment keep automated installs non-interactive.
+  if [ -n "$SERVER_URL" ] || [ -n "$LAN_SERVER_URL" ] || [ -n "$TAILSCALE_SERVER_URL" ]; then
+    return
+  fi
+  if ! { exec 3<>/dev/tty; } 2>/dev/null || [ ! -t 3 ]; then
+    return
+  fi
+
+  echo >&3
+  echo "Server addresses" >&3
+  echo "Enter either or both. Press Enter to leave an address unset." >&3
+  echo >&3
+  printf 'LAN/cloud IP or URL (e.g. 192.168.1.20 or https://plans.example.com): ' >&3
+  IFS= read -r input <&3 || input=""
+  if [ -n "$input" ]; then
+    LAN_SERVER_URL="$(normalize_lan_url "$input")"
+  fi
+  printf 'Tailscale hostname or URL (e.g. plans.example.ts.net): ' >&3
+  IFS= read -r input <&3 || input=""
+  if [ -n "$input" ]; then
+    TAILSCALE_SERVER_URL="$(normalize_tailscale_url "$input")"
+  fi
+  exec 3>&-
+}
+
+client_record_urls() {
+  LAN_SERVER_URL="${LAN_SERVER_URL%/}"
+  TAILSCALE_SERVER_URL="${TAILSCALE_SERVER_URL%/}"
+  if [ -z "$SERVER_URL" ]; then
+    if [ -n "$TAILSCALE_SERVER_URL" ]; then
+      SERVER_URL="$TAILSCALE_SERVER_URL"
+    else
+      SERVER_URL="$LAN_SERVER_URL"
+    fi
+  fi
   [ -n "$SERVER_URL" ] || return 0
   SERVER_URL="${SERVER_URL%/}"
   mkdir -p "$(dirname "$CONFIG")"
   if command -v python3 >/dev/null 2>&1; then
-    python3 - "$CONFIG" "$SERVER_URL" <<'PY'
+    python3 - "$CONFIG" "$SERVER_URL" "$LAN_SERVER_URL" "$TAILSCALE_SERVER_URL" <<'PY'
 import json, os, sys
-path, url = sys.argv[1], sys.argv[2]
+path, preferred, lan, tailnet = sys.argv[1:5]
 data = {}
 if os.path.exists(path):
     try:
@@ -1020,7 +1364,11 @@ if os.path.exists(path):
         data = {}
 if not isinstance(data, dict):
     data = {}
-data["push_url"] = url
+data["push_url"] = preferred
+if lan:
+    data["lan_url"] = lan
+if tailnet:
+    data["tailscale_url"] = tailnet
 tmp = path + ".tmp"
 with open(tmp, "w") as f:
     json.dump(data, f, indent=2)
@@ -1028,8 +1376,21 @@ with open(tmp, "w") as f:
 os.replace(tmp, path)
 PY
     echo "configured $CONFIG  push_url=$SERVER_URL"
+    [ -n "$LAN_SERVER_URL" ] && echo "                         lan_url=$LAN_SERVER_URL"
+    [ -n "$TAILSCALE_SERVER_URL" ] && echo "                   tailscale_url=$TAILSCALE_SERVER_URL"
   elif [ ! -e "$CONFIG" ]; then
-    printf '{\n  "push_url": "%s"\n}\n' "$SERVER_URL" > "$CONFIG"
+    if [ -n "$LAN_SERVER_URL" ] && [ -n "$TAILSCALE_SERVER_URL" ]; then
+      printf '{\n  "push_url": "%s",\n  "lan_url": "%s",\n  "tailscale_url": "%s"\n}\n' \
+        "$SERVER_URL" "$LAN_SERVER_URL" "$TAILSCALE_SERVER_URL" > "$CONFIG"
+    elif [ -n "$LAN_SERVER_URL" ]; then
+      printf '{\n  "push_url": "%s",\n  "lan_url": "%s"\n}\n' \
+        "$SERVER_URL" "$LAN_SERVER_URL" > "$CONFIG"
+    elif [ -n "$TAILSCALE_SERVER_URL" ]; then
+      printf '{\n  "push_url": "%s",\n  "tailscale_url": "%s"\n}\n' \
+        "$SERVER_URL" "$TAILSCALE_SERVER_URL" > "$CONFIG"
+    else
+      printf '{\n  "push_url": "%s"\n}\n' "$SERVER_URL" > "$CONFIG"
+    fi
     echo "configured $CONFIG  push_url=$SERVER_URL"
   else
     echo "install: python3 not found and $CONFIG already exists — add" >&2
@@ -1042,9 +1403,11 @@ run_client() {
     client_uninstall
     return
   fi
+  prompt_client_urls
+  check_tailscale_dns
   [ "$DO_CLI" -eq 1 ] && client_install_cli
   [ "$DO_SKILLS" -eq 1 ] && run_skills_cli add
-  client_record_url
+  client_record_urls
 
   echo
   if [ "$DO_CLI" -eq 1 ]; then
@@ -1184,6 +1547,112 @@ resolve_binary() { # <dest>
     --binary /path/to/plans-$PLATFORM"
 }
 
+server_status_output() { # <plans-binary> <service-flags>
+  local target="$1" flags="$2"
+  # shellcheck disable=SC2086
+  "$target" service status $flags 2>/dev/null || true
+}
+
+tailnet_value() { # <status-output> <auth-url|fqdn>
+  case "$2" in
+    auth-url)
+      printf '%s\n' "$1" |
+        sed -n 's#^Tailnet auth:.*visit \(https://[^ ]*\).*#\1#p' |
+        head -1
+      ;;
+    fqdn)
+      printf '%s\n' "$1" |
+        sed -n 's/^Tailnet auth:[[:space:]]*authenticated as \([^ ]*\).*/\1/p' |
+        head -1
+      ;;
+  esac
+}
+
+wait_for_tailnet_value() { # <plans-binary> <service-flags> <field> <seconds>
+  local target="$1" flags="$2" field="$3" limit="$4"
+  local elapsed=0 status value
+  while [ "$elapsed" -lt "$limit" ]; do
+    status="$(server_status_output "$target" "$flags")"
+    value="$(tailnet_value "$status" "$field")"
+    if [ -n "$value" ]; then
+      printf '%s' "$value"
+      return 0
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+  return 1
+}
+
+print_client_install_command() { # <server-url>
+  echo
+  echo "Install the client on your laptop with:"
+  echo
+  echo "  curl -fsSL $INSTALL_URL | bash -s -- --client --tailscale-url $1"
+}
+
+guide_tailscale_setup() { # <plans-binary> <service-flags>
+  local target="$1" flags="$2" auth_url="" fqdn="" answer=""
+
+  # Returning users may already have authenticated this tsnet node.
+  fqdn="$(wait_for_tailnet_value "$target" "$flags" fqdn 3 || true)"
+  if [ -n "$fqdn" ]; then
+    fqdn="${fqdn%.}"
+    SERVER_URL="https://$fqdn"
+    TAILSCALE_SERVER_URL="$SERVER_URL"
+    echo
+    echo "Tailscale is ready:  $SERVER_URL"
+    print_client_install_command "$SERVER_URL"
+    return
+  fi
+
+  echo
+  echo "Waiting for the Tailscale authentication URL..."
+  auth_url="$(wait_for_tailnet_value "$target" "$flags" auth-url 30 || true)"
+  if [ -z "$auth_url" ]; then
+    echo "Tailscale has not produced an authentication URL yet."
+    echo "You can check again at any time with:  plans service status"
+    return
+  fi
+
+  echo
+  echo "Tailscale needs one-time approval for the 'plans' node:"
+  echo
+  echo "  $auth_url"
+  echo
+
+  if ! { exec 3<>/dev/tty; } 2>/dev/null || [ ! -t 3 ]; then
+    echo "Open that URL to approve the node, then run:  plans service status"
+    return
+  fi
+
+  printf 'Press Enter after approving it, or type s to skip Tailscale setup: ' >&3
+  IFS= read -r answer <&3 || answer="s"
+  exec 3>&-
+  case "$answer" in
+    s|S|q|Q|n|N|cancel|Cancel)
+      echo
+      echo "Tailscale setup skipped. The LAN service remains available."
+      echo "Resume later with:  plans service status"
+      return
+      ;;
+  esac
+
+  echo
+  echo "Waiting for Tailscale to finish connecting..."
+  fqdn="$(wait_for_tailnet_value "$target" "$flags" fqdn 120 || true)"
+  if [ -z "$fqdn" ]; then
+    echo "Tailscale is still connecting. Check it with:  plans service status"
+    return
+  fi
+
+  fqdn="${fqdn%.}"
+  SERVER_URL="https://$fqdn"
+  TAILSCALE_SERVER_URL="$SERVER_URL"
+  echo "Tailscale is ready:  $SERVER_URL"
+  print_client_install_command "$SERVER_URL"
+}
+
 server_uninstall() {
   local bin_dir target sudo_cmd flags
   bin_dir="$(server_bin_dir)"
@@ -1247,6 +1716,13 @@ run_server() {
   # shellcheck disable=SC2086
   $sudo_cmd install -m 0755 "$SERVER_TMP/plans" "$target"
   echo "  installed  $target"
+  ensure_command_on_path "$bin_dir"
+  hash -r 2>/dev/null || true
+  echo
+  echo "CLI ready"
+  echo "  command     plans"
+  echo "  location    $target"
+  echo "  help        plans --help"
 
   # Register the service using the installed path, not the temp one — the unit
   # records whatever binary invokes it (os.Executable), so running the temp
@@ -1268,11 +1744,7 @@ run_server() {
   cleanup_server_tmp
   trap - EXIT
 
-  echo
-  echo "Next:"
-  echo "  1. $target service status     # listeners, tailnet auth state, health"
-  echo "  2. Open the Tailscale auth URL it prints to approve the 'plans' node."
-  echo "  3. On your laptop:  curl -fsSL $INSTALL_URL | bash -s -- --client --url https://plans.<tailnet>.ts.net"
+  guide_tailscale_setup "$target" "$flags"
 }
 
 # ---- dispatch --------------------------------------------------------------

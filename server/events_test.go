@@ -159,7 +159,7 @@ func TestEventsStreamOnWrite(t *testing.T) {
 }
 
 // TestEventsStatusWritePublishes covers the status path specifically: it is
-// the call the implement-plan skill makes most often, so it is the one that
+// Status updates are the most common event-stream write, so this is the one that
 // actually drives the live view.
 func TestEventsStatusWritePublishes(t *testing.T) {
 	_, ts := newTestServer(t)
