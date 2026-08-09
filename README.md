@@ -56,7 +56,7 @@ has to and tells you if it can't.
 
 Installs the `push-plan` command (to `~/.local/bin`, or `/usr/local/bin` if
 that's writable and `~/.local/bin` isn't on `PATH`), then launches
-`npx skills add` for the two agent skills. The skills CLI detects supported
+`npx skills add` for the HTML plans agent skill. The skills CLI detects supported
 agents and lets you independently choose Claude Code, Codex, Cursor, or any
 other supported destination. The skills are installed globally so they are
 available across projects.
@@ -238,7 +238,8 @@ repo you (or an agent) happen to be in — nobody clones this repo to use it.
 
 ### Install (no checkout needed)
 
-It arrives with the client half of the installer, alongside both skills:
+It arrives with the client half of the installer, alongside the HTML plans
+skill:
 
 ```bash
 U=https://raw.githubusercontent.com/ayushdeolasee/hosted-html-plans/main/install.sh
@@ -246,16 +247,16 @@ curl -fsSL $U | bash -s -- --client
 curl -fsSL $U | bash -s -- --client --url https://plans.<tailnet>.ts.net
 ```
 
-The `push-plan` command is embedded in the installer. The two skills are
+The `push-plan` command is embedded in the installer. The `html-plans` skill is
 discovered from this repository by `npx skills`, which owns agent detection,
-global placement, updates, and multi-agent selection. The push-plan skill also
-bundles its own copy of the executable, so an agent can use it even where the
+global placement, updates, and multi-agent selection. The skill also bundles
+its own copy of the executable, so an agent can use it even where the
 standalone command did not make it onto `PATH`.
 
 ### Generated artifacts — don't hand-edit
 
-`install.sh` and `skill/push-plan/push-plan` are **generated** from
-`scripts/push-plan` and `scripts/build-installer`. The `SKILL.md` files are
+`install.sh` and `skill/html-plans/push-plan` are **generated** from
+`scripts/push-plan` and `scripts/build-installer`. The `SKILL.md` file is
 read directly from the repository by `npx skills`:
 
 ```bash
@@ -282,10 +283,16 @@ same for the server half using your locally-built `./plans`.
 push-plan <file.html> [title] [-m "one-line note"]
 ```
 
-- **Server URL resolution**: `$PLANS_URL` is an explicit override. Otherwise
-  the CLI tries `tailscale_url`, then `lan_url`, then the legacy `push_url`
-  from `~/.config/plans/config.json`. It uses localhost only when no address
-  is configured.
+- **Server URL resolution**: a full URL passed to `pull` pins the server it
+  names and outranks everything else; `$PLANS_URL` is the next explicit
+  override. Otherwise the CLI tries `tailscale_url`, then `lan_url`, then the
+  legacy `push_url` from `~/.config/plans/config.json`. It uses localhost only
+  when no address is configured.
+- **`pull` takes a slug or a URL**: `push-plan pull https://plans.x.ts.net/p/foo`
+  is equivalent to a bare `push-plan pull foo` against that host. A `?version=`
+  in the URL is honoured; `--version` overrides it. Parsing the URL in the CLI
+  is the point — callers (agents included) never have to split it into a slug
+  plus a `PLANS_URL=` prefix.
 - **Safe fallback**: push, pull, and GC advance to the next URL only when curl
   cannot connect. Any HTTP response is authoritative, so writes rejected with
   409/4xx/5xx are never replayed against a second server. If every address is
@@ -300,33 +307,19 @@ push-plan <file.html> [title] [-m "one-line note"]
 - Clear errors on a missing file, an unreachable server, or a non-2xx
   response (prints the response body).
 
-## The two agent skills
+## The agent skill
 
 Installed globally for whichever agents the user selects in the `npx skills`
 picker:
 
-- **`push-plan`** (`skill/push-plan/SKILL.md`) — for the *authoring* side.
-  Teaches the model to embed the `plan-meta` JSON block in HTML
-  deliverables, auto-fill `repo`/`branch` from git, check
-  `GET /api/plans?repo=&branch=` first and revise an existing plan instead
-  of creating a near-duplicate, push via the globally-installed `push-plan`
-  command (falling back to the skill-local copy, then raw curl),
-  always pass `?note=`, and hand back the tailnet URL. States explicitly
-  that agents never use the share button — that's human-only.
-- **`implement-plan`** (`skill/implement-plan/SKILL.md`) — for the
-  *implementing* side. The 5-step protocol: fetch `?format=text` and note
-  the base version; genuinely review the plan against repo reality (a gate,
-  not a summary); verify `meta.repo`/`meta.branch` against the actual git
-  remote/branch and stop on mismatch; implement phase by phase, checking
-  each `accept` criterion; write back continuously via `status` ticks +
-  `append` notes after each phase, reserving `PUT` + `base_version` +
-  409-retry for structural revisions. Includes a soft gate on
-  `status: draft` plans (warn + confirm) and repo/branch discovery for
-  "implement the plan for this branch" with no URL pasted. Optional
-  `--archive` behavior commits a final snapshot to `docs/plans/` in the
-  target repo.
+- **`html-plans`** (`skill/html-plans/SKILL.md`) explains only how to access
+  the hosted service: find a plan by URL or repository/branch, retrieve its
+  raw HTML into the private draft cache, publish or revise an HTML plan, and
+  return the private tailnet URL. It deliberately defines no special plan
+  implementation workflow; after retrieval, the agent handles the file like
+  any other local HTML plan.
 
-End users can also install them directly with:
+End users can also install it directly with:
 
 ```bash
 npx skills add ayushdeolasee/hosted-html-plans --global

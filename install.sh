@@ -36,8 +36,8 @@ hosted-html-plans installer
 
 Modes (no flag: interactive picker in a terminal, --client otherwise)
   --client            Install the `push-plan` command and use `npx skills` to
-                      add both agent skills (push-plan, implement-plan) wherever
-                      you author or implement plans.
+                      add the html-plans agent skill wherever you work with
+                      hosted HTML plans.
   --server            Install the `plans` binary and register it as a
                       background service (launchd on macOS, systemd on Linux)
                       on the box that hosts them.
@@ -268,7 +268,7 @@ write_push_plan() { # <target>
 # Usage:
 #   push-plan <file.html> [title] [-m note] [--slug S] [--base-version N]
 #   push-plan draft [slug]              print the path to write the plan HTML to
-#   push-plan pull <slug> [--version N] fetch a plan into the draft cache
+#   push-plan pull <slug|url> [--version N] fetch a plan into the draft cache
 #   push-plan gc                        drop drafts whose plan is gone server-side
 #
 # The draft cache exists so agents never litter a git worktree with plan HTML.
@@ -284,11 +284,16 @@ write_push_plan() { # <target>
 # assigns a real slug on the first push.
 #
 # URL resolution, in order:
-#   1. $PLANS_URL env var (explicit override; no fallback)
-#   2. "tailscale_url" in ~/.config/plans/config.json
-#   3. "lan_url" in ~/.config/plans/config.json
-#   4. legacy "push_url" in ~/.config/plans/config.json
-#   5. http://localhost:8080 when no URL is configured
+#   1. the server in a full URL passed to `pull` (explicit; no fallback)
+#   2. $PLANS_URL env var (explicit override; no fallback)
+#   3. "tailscale_url" in ~/.config/plans/config.json
+#   4. "lan_url" in ~/.config/plans/config.json
+#   5. legacy "push_url" in ~/.config/plans/config.json
+#   6. http://localhost:8080 when no URL is configured
+#
+# `pull` accepts either a bare slug or a full plan URL. A URL pins the server
+# it names, so a configured default (which may be a *different* box) can never
+# win and silently hand back a different plan that happens to share the slug.
 #
 # Repo + branch are auto-tagged from the git context this script runs in
 # (git remote get-url origin / git branch --show-current); both are omitted
@@ -309,7 +314,9 @@ usage() {
 usage:
   push-plan <file.html> [title] [-m "note"] [--slug S] [--base-version N]
   push-plan draft [slug]               print the draft path to write HTML to
-  push-plan pull <slug> [--version N]  fetch a plan into the draft cache
+  push-plan pull <slug|url> [--version N]
+                                       fetch a plan into the draft cache; a
+                                       full URL pins the server it names
   push-plan gc                         remove drafts with no plan on the server
 
 env:
@@ -341,6 +348,77 @@ NOTE=""
 SLUG=""
 BASE_VERSION=""
 VERSION=""
+# Server pinned by a full URL argument. Set by split_plan_url; consulted by
+# resolve_urls ahead of everything else, and never falls back.
+PLANS_URL_PIN=""
+# Version carried in a URL's query string. Applied only when --version was not
+# given explicitly, so the flag always wins.
+URL_VERSION=""
+
+# ---- accept a plan URL wherever a slug is accepted ----------------------
+#
+# `pull` takes either a bare slug or a full URL. Splitting the URL here, in the
+# CLI, is deliberate: the alternative is every caller (a human, or an agent
+# reading SKILL.md) hand-parsing it into a slug plus a PLANS_URL= prefix, which
+# is a step that fails quietly on trailing slashes, ports, and query strings.
+#
+# Assigns the globals PLAN_SLUG, PLANS_URL_PIN (server) and URL_VERSION (from
+# ?version=). It cannot echo its result: a command substitution would run it in
+# a subshell, where those assignments — and a failing `exit` — would be lost.
+# A bare `/p/<slug>` path with no host pins nothing and resolves normally.
+PLAN_SLUG=""
+split_plan_url() {
+  local arg="$1" rest="" path="" query="" slug="" part=""
+
+  case "$arg" in
+    *://*)
+      rest="${arg#*://}"
+      case "$rest" in
+        */*) path="/${rest#*/}" ;;
+        *)   path="" ;;
+      esac
+      # Everything before the first path separator is scheme + authority.
+      PLANS_URL_PIN="${arg%"$path"}"
+      PLANS_URL_PIN="${PLANS_URL_PIN%/}"
+      ;;
+    /*)
+      path="$arg"
+      ;;
+    *)
+      # A bare slug — nothing to split.
+      PLAN_SLUG="$arg"
+      return 0
+      ;;
+  esac
+
+  case "$path" in
+    *\?*)
+      query="${path#*\?}"
+      path="${path%%\?*}"
+      ;;
+  esac
+  # Drop a fragment; browsers hand these out and the server never sees them.
+  path="${path%%#*}"
+  path="${path%/}"
+  slug="${path##*/}"
+
+  if [ -z "$slug" ]; then
+    echo "push-plan pull: could not find a plan slug in: $arg" >&2
+    exit 1
+  fi
+
+  # Pull ?version=N out of the query; ignore every other parameter.
+  local old_ifs="$IFS"
+  IFS='&'
+  for part in $query; do
+    case "$part" in
+      version=*) URL_VERSION="${part#version=}" ;;
+    esac
+  done
+  IFS="$old_ifs"
+
+  PLAN_SLUG="$slug"
+}
 
 case "$SUBCMD" in
   draft)
@@ -385,10 +463,14 @@ case "$SUBCMD" in
       esac
     done
     if [ -z "$SLUG" ]; then
-      echo "push-plan pull: missing <slug>" >&2
+      echo "push-plan pull: missing <slug|url>" >&2
       usage
       exit 1
     fi
+    split_plan_url "$SLUG"
+    SLUG="$PLAN_SLUG"
+    # An explicit --version overrides one carried in the URL.
+    [ -z "$VERSION" ] && VERSION="$URL_VERSION"
     if [ -n "$VERSION" ]; then
       case "$VERSION" in
         *[!0-9]*|0)
@@ -555,6 +637,14 @@ if isinstance(d, list):
 # ---- resolve server URL -------------------------------------------------
 
 resolve_urls() {
+  # A server named in a URL argument is the most explicit signal there is: it
+  # outranks even $PLANS_URL, and emits a single candidate so there is no
+  # fallback to some other box holding a same-named plan.
+  if [ -n "$PLANS_URL_PIN" ]; then
+    printf '%s\n' "${PLANS_URL_PIN%/}"
+    return
+  fi
+
   if [ -n "${PLANS_URL:-}" ]; then
     printf '%s\n' "${PLANS_URL%/}"
     return
@@ -1055,9 +1145,9 @@ run_skills_cli() { # <add|remove>
   local action="$1" agent
   local args=()
   if [ "$action" = "add" ]; then
-    args=(add "$SKILLS_SOURCE" --global --skill push-plan --skill implement-plan)
+    args=(add "$SKILLS_SOURCE" --global --skill html-plans)
   else
-    args=(remove push-plan implement-plan --global)
+    args=(remove html-plans --global)
   fi
 
   for agent in "${SKILLS_AGENTS[@]+"${SKILLS_AGENTS[@]}"}"; do
@@ -1072,7 +1162,7 @@ run_skills_cli() { # <add|remove>
   fi
 
   echo
-  echo "Choose which agents should receive the hosted-html-plans skills:"
+  echo "Choose which agents should receive the hosted-html-plans skill:"
   echo
   # The installer is commonly piped into Bash, so stdin is the script rather
   # than the keyboard. Give the skills CLI the controlling terminal directly.

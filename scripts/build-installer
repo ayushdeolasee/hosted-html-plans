@@ -3,7 +3,7 @@
 #
 # install.sh is one file that installs either side of the system:
 #
-#   --client   the `push-plan` command + both Claude Code skills
+#   --client   the `push-plan` command + the HTML plans agent skill
 #   --server   the `plans` binary + its launchd/systemd service
 #   (no flag)  in a terminal, an interactive menu to pick either or both;
 #              non-interactive runs keep the historical --client default
@@ -16,7 +16,7 @@
 # Sources of truth, never hand-edit the artifacts generated from them:
 #
 #   scripts/push-plan             -> embedded in install.sh
-#                                 -> copied to skill/push-plan/push-plan
+#                                 -> copied to skill/html-plans/push-plan
 #   skill/*/SKILL.md              -> discovered by `npx skills`
 #
 # Usage:
@@ -27,15 +27,14 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="$ROOT/scripts/push-plan"
-SKILL_PP_MD="$ROOT/skill/push-plan/SKILL.md"
-SKILL_IP_MD="$ROOT/skill/implement-plan/SKILL.md"
+SKILL_MD="$ROOT/skill/html-plans/SKILL.md"
 INSTALLER="$ROOT/install.sh"
-SKILL_COPY="$ROOT/skill/push-plan/push-plan"
+SKILL_COPY="$ROOT/skill/html-plans/push-plan"
 
 CHECK=0
 [ "${1:-}" = "--check" ] && CHECK=1
 
-for f in "$SRC" "$SKILL_PP_MD" "$SKILL_IP_MD"; do
+for f in "$SRC" "$SKILL_MD"; do
   [ -f "$f" ] || { echo "build-installer: missing $f" >&2; exit 1; }
 done
 
@@ -97,8 +96,8 @@ hosted-html-plans installer
 
 Modes (no flag: interactive picker in a terminal, --client otherwise)
   --client            Install the `push-plan` command and use `npx skills` to
-                      add both agent skills (push-plan, implement-plan) wherever
-                      you author or implement plans.
+                      add the html-plans agent skill wherever you work with
+                      hosted HTML plans.
   --server            Install the `plans` binary and register it as a
                       background service (launchd on macOS, systemd on Linux)
                       on the box that hosts them.
@@ -400,9 +399,9 @@ run_skills_cli() { # <add|remove>
   local action="$1" agent
   local args=()
   if [ "$action" = "add" ]; then
-    args=(add "$SKILLS_SOURCE" --global --skill push-plan --skill implement-plan)
+    args=(add "$SKILLS_SOURCE" --global --skill html-plans)
   else
-    args=(remove push-plan implement-plan --global)
+    args=(remove html-plans --global)
   fi
 
   for agent in "${SKILLS_AGENTS[@]+"${SKILLS_AGENTS[@]}"}"; do
@@ -417,7 +416,7 @@ run_skills_cli() { # <add|remove>
   fi
 
   echo
-  echo "Choose which agents should receive the hosted-html-plans skills:"
+  echo "Choose which agents should receive the hosted-html-plans skill:"
   echo
   # The installer is commonly piped into Bash, so stdin is the script rather
   # than the keyboard. Give the skills CLI the controlling terminal directly.
@@ -1035,7 +1034,7 @@ compare() { # <generated> <committed>
 
 if [ "$CHECK" -eq 1 ]; then
   compare "$TMP/install.sh" "$INSTALLER" || { echo "STALE: install.sh" >&2; stale=1; }
-  compare "$SRC" "$SKILL_COPY"           || { echo "STALE: skill/push-plan/push-plan" >&2; stale=1; }
+  compare "$SRC" "$SKILL_COPY"           || { echo "STALE: skill/html-plans/push-plan" >&2; stale=1; }
   if [ "$stale" -eq 1 ]; then
     echo "build-installer: generated artifacts are out of date — run 'make installer'" >&2
     exit 1
