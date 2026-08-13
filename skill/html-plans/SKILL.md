@@ -1,6 +1,6 @@
 ---
 name: html-plans
-description: Retrieve, author, publish, and revise private HTML plans on a hosted-html-plans server. Use when the user provides a hosted plan URL, asks for the plan associated with the current repository or branch, wants an existing hosted plan downloaded or revised, or wants an HTML plan or other HTML deliverable published to the plans server.
+description: Retrieve, author, publish, and revise private HTML plans on a hosted-html-plans server. Use when the user provides a hosted plan URL, asks for the plan associated with the current repository or branch, wants an existing hosted plan downloaded or revised, or wants an HTML plan to be generated.
 ---
 
 # HTML plans
