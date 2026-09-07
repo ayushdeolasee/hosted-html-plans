@@ -8,66 +8,63 @@
   /* ------------------------------------------------------------------
      Design tokens.
 
-     Two rules drive everything below:
+    Two rules drive everything below:
 
-     1. Typeface encodes provenance. Serif = prose a human reads (plan
-        titles). Mono = data a machine wrote (slugs, versions, branches,
-        agents, timestamps). Sans = controls a human clicks. All three
-        come from the system stack so a box with no internet still renders
-        correctly.
+    1. One calm system typeface keeps the library cohesive. Weight, spacing,
+       and position distinguish supporting data instead of swapping fonts.
 
-     2. --hazard is reserved for exactly one meaning: this plan is
+    2. --hazard is reserved for exactly one meaning: this plan is
         reachable from the public internet (Tailscale funnel is open).
         It appears nowhere else.
      ------------------------------------------------------------------ */
   :root {
     color-scheme: light dark;
 
-    --paper:      #e7e9ec;
-    --plate:      #fbfbfc;
-    --gutter:     #dfe2e7;
-    --ink:        #171a20;
-    --graphite:   #5c6472;
-    --rule:       #d3d6dc;
-    --ultramarine:#2a35ce;
-    --ultra-wash: #e5e7fb;
-    --spine-origin:#3b424e;
-    --verdigris:  #14705a;
-    --hazard:     #8a6400;
-    --hazard-bg:  #f2d98a;
-    --alarm:      #a8261c;
-    --alarm-wash: #f7dedb;
+    --paper:      #f7f8fa;
+    --plate:      #ffffff;
+    --gutter:     #eef0f4;
+    --ink:        #252932;
+    --graphite:   #727a87;
+    --rule:       #e1e5ea;
+    --ultramarine:#4f7197;
+    --ultra-wash: #eaf1f8;
+    --spine-origin:#727a87;
+    --verdigris:  #4f7197;
+    --hazard:     #9b6331;
+    --hazard-bg:  #f7ede3;
+    --alarm:      #a4524d;
+    --alarm-wash: #f9ebea;
     /* Same hue as --hazard but a distinct token on purpose: --hazard means
        exactly one thing (public internet exposure) and appears nowhere
        else. --warn is the generic "needs attention" amber — e.g. restart
        required, waiting for authentication. */
-    --warn:       #8a6400;
-    --warn-bg:    #f2d98a;
+    --warn:       #95662e;
+    --warn-bg:    #f5ead9;
 
-    --serif: ui-serif, "New York", Iowan Old Style, Georgia, serif;
-    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Mono", monospace;
     --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --serif: var(--sans);
+    --mono: var(--sans);
 
     --radius: 5px;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --paper:      #101216;
-      --plate:      #171a20;
-      --gutter:     #1e222a;
-      --ink:        #e4e6ea;
-      --graphite:   #8a93a3;
-      --rule:       #262a33;
-      --ultramarine:#7c86ff;
-      --ultra-wash: #1c2140;
-      --spine-origin:#aab2c0;
-      --verdigris:  #4fc49e;
-      --hazard:     #f0c14b;
-      --hazard-bg:  #3d3113;
-      --alarm:      #f08a80;
-      --alarm-wash: #3a1c19;
-      --warn:       #f0c14b;
-      --warn-bg:    #3d3113;
+      --paper:      #171a20;
+      --plate:      #1d2128;
+      --gutter:     #282d36;
+      --ink:        #e7eaf0;
+      --graphite:   #9aa3b1;
+      --rule:       #353c47;
+      --ultramarine:#a9c5e5;
+      --ultra-wash: #273647;
+      --spine-origin:#9aa3b1;
+      --verdigris:  #a9c5e5;
+      --hazard:     #ddb682;
+      --hazard-bg:  #3b2d22;
+      --alarm:      #e1a09b;
+      --alarm-wash: #3b2728;
+      --warn:       #ddb477;
+      --warn-bg:    #3b2d20;
     }
   }
 
@@ -89,13 +86,12 @@
     border-radius: 3px;
   }
 
-  /* Small-caps mono label. Used for every machine-authored category:
-     section eyebrows, statuses, actions. */
+  /* Small, quiet labels support scanning without introducing another face. */
   .tag {
     font-family: var(--mono);
-    font-size: 10.5px;
-    letter-spacing: 0.11em;
-    text-transform: uppercase;
+    font-size: 11px;
+    letter-spacing: 0;
+    text-transform: none;
     font-weight: 600;
   }
 
@@ -246,17 +242,17 @@
 
   .repo-group + .repo-group { margin-top: 44px; }
   .repo-head {
-    font-family: var(--mono); font-size: 12.5px; font-weight: 600;
+    font-family: var(--sans); font-size: 14px; font-weight: 600;
     color: var(--ink);
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--ink);
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--rule);
     overflow-wrap: anywhere;
   }
   .repo-head .host { color: var(--graphite); font-weight: 400; }
 
   .branch-band {
     display: flex; align-items: center; gap: 10px;
-    margin: 22px 0 10px;
+    margin: 20px 0 9px;
     color: var(--graphite);
   }
   .branch-band .rule { flex: 1; height: 1px; background: var(--rule); }
@@ -340,8 +336,8 @@
   }
   .status-draft       { color: var(--graphite); }
   .status-draft::before { background: transparent; box-shadow: inset 0 0 0 1px currentColor; }
-  .status-approved    { color: var(--ultramarine); }
-  .status-in-progress { color: var(--ink); }
+  .status-approved    { color: var(--graphite); }
+  .status-in-progress { color: var(--graphite); }
   .status-in-progress::before {
     background: linear-gradient(90deg, currentColor 50%, transparent 50%);
     box-shadow: inset 0 0 0 1px currentColor;
@@ -365,22 +361,17 @@
   }
   .facts .versions:hover { color: var(--ink); }
 
-  /* Phase progress: a segmented bar, one cell per phase — it counts, so
-     show the count, not a percentage. */
-  .phases { display: flex; gap: 3px; margin-top: 9px; align-items: center; }
-  .cell {
-    height: 4px; width: 22px; border-radius: 1px;
-    background: var(--gutter); box-shadow: inset 0 0 0 1px var(--rule);
+  /* Native progress retains completion semantics for assistive technology. */
+  .phases { display: flex; margin-top: 12px; align-items: center; }
+  .phase-progress {
+    appearance: none; -webkit-appearance: none;
+    display: block; width: 180px; max-width: 100%; height: 6px;
+    border: 0; border-radius: 999px; overflow: hidden;
+    background: var(--gutter); color: var(--ultramarine);
   }
-  .cell.done { background: var(--verdigris); box-shadow: none; }
-  .cell.active {
-    background: linear-gradient(90deg, var(--verdigris) 50%, var(--gutter) 50%);
-    box-shadow: inset 0 0 0 1px var(--rule);
-  }
-  .phases .count {
-    font-family: var(--mono); font-size: 11px; color: var(--graphite);
-    margin-left: 5px; font-variant-numeric: tabular-nums;
-  }
+  .phase-progress::-webkit-progress-bar { background: var(--gutter); border-radius: 999px; }
+  .phase-progress::-webkit-progress-value { background: var(--ultramarine); border-radius: 999px; }
+  .phase-progress::-moz-progress-bar { background: var(--ultramarine); border-radius: 999px; }
 
   .actions { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 11px; }
   .actions button { font-size: 12px; padding: 3px 9px; }
@@ -623,6 +614,67 @@
     .plan-title { font-size: 17px; }
     .actions { opacity: 1; }
   }
+
+  .library-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 24px; margin-bottom: 36px; }
+  .library-heading h2 { margin: 0; font-size: 24px; letter-spacing: -.03em; line-height: 1.2; overflow-wrap: anywhere; }
+  .library-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+  .library-toolbar p { margin: 0; font-size: 12px; color: var(--graphite); }
+  .repo-count { font-size: 12px; color: var(--graphite); font-weight: 400; margin-left: auto; white-space: nowrap; }
+  .repo-head { display: flex; align-items: baseline; gap: 12px; margin: 0; padding-bottom: 12px; font-size: 24px; font-weight: 750; letter-spacing: -.025em; line-height: 1.3; }
+  .repo-name { min-width: 0; }
+  .repo-count { letter-spacing: normal; }
+  .row:hover { border-color: var(--ultramarine); }
+  @media (prefers-color-scheme: dark) { button.solid { color: var(--paper); } }
+
+  /* Most visits are for reading, not managing. Keep state and identity in
+     the scan path; move the infrequent (and destructive) controls behind a
+     native disclosure so long libraries remain calm and usable. */
+  .wordmark::before { content: none; }
+  .masthead-inner { max-width: 1240px; padding-top: 18px; padding-bottom: 18px; }
+  .frame { max-width: 1240px; grid-template-columns: 200px minmax(0, 1fr); gap: 48px; padding-top: 40px; }
+  .facet { padding: 9px 10px; border-radius: 7px; }
+  aside.rail { top: 96px; }
+  .search-wrap { max-width: 460px; }
+  input[type="search"] { padding: 10px 32px 10px 12px; border-radius: 8px; }
+  .views { gap: 4px; }
+  .views button { border-color: transparent; }
+  .views button:hover { border-color: var(--rule); }
+  .row { display: block; border-radius: 8px; box-shadow: none; }
+  .row-body { padding: 15px 18px; }
+  .row-head { justify-content: space-between; gap: 8px 14px; }
+  .row-head-main { display: flex; align-items: baseline; gap: 9px; min-width: 0; flex-wrap: wrap; }
+  .plan-title { font-size: 18px; font-weight: 650; letter-spacing: -0.015em; }
+  .row-summary { display: flex; align-items: center; gap: 8px; color: var(--graphite); font-size: 12.5px; }
+  .row-summary time { white-space: nowrap; }
+  .facts { margin-top: 6px; }
+  .plan-details { margin-top: 14px; border-top: 1px solid var(--rule); }
+  .plan-details > summary {
+    cursor: pointer; color: var(--graphite); font-size: 12.5px;
+    padding: 11px 0 0; list-style: none;
+  }
+  .plan-details > summary::-webkit-details-marker { display: none; }
+  .plan-details > summary::before { content: "+"; display: inline-block; width: 16px; color: var(--ultramarine); font-size: 15px; line-height: .7; }
+  .plan-details[open] > summary::before { content: "−"; }
+  .plan-details > summary:hover { color: var(--ink); }
+  .plan-details[open] > summary { color: var(--ink); }
+  .details-content { padding-top: 10px; }
+  .actions { margin-top: 0; opacity: 1; }
+  .actions button { font-size: 12px; }
+  .log { margin-top: 14px; }
+  .spine { display: none; }
+  .placeholder { background: var(--plate); border-style: solid; }
+  @media (max-width: 800px) {
+    .frame { grid-template-columns: 1fr; gap: 24px; padding-top: 24px; }
+    aside.rail { position: static; }
+    .library-heading { margin-bottom: 28px; }
+  }
+  @media (max-width: 520px) {
+    .masthead-inner { flex-wrap: wrap; gap: 12px; padding: 14px 16px; }
+    .search-wrap { order: 3; flex-basis: 100%; max-width: none; }
+    .frame { padding-left: 16px; padding-right: 16px; }
+    .row-head { align-items: flex-start; }
+    .repo-head { font-size: 22px; }
+  }
 </style>
 </head>
 <body class="booting">
@@ -631,13 +683,13 @@
   <div class="masthead-inner">
     <h1 class="wordmark">plans</h1>
     <div class="search-wrap">
-      <input type="search" id="search" placeholder="Filter by title, slug, or branch" autocomplete="off" aria-label="Filter plans">
+      <input type="search" id="search" placeholder="Search plans, projects, or branches" autocomplete="off" aria-label="Filter plans">
       <kbd>/</kbd>
     </div>
     <nav class="views" aria-label="Views">
       <button id="view-plans" class="solid" aria-pressed="true">Plans</button>
       <button id="view-trash" aria-pressed="false">Trash</button>
-      <button id="view-settings" aria-pressed="false" title="Settings">⚙ Settings</button>
+      <button id="view-settings" aria-pressed="false">Settings</button>
     </nav>
   </div>
 
@@ -650,19 +702,26 @@
 </header>
 
 <div class="frame" id="frame">
-  <aside class="rail">
+  <aside class="rail" aria-label="Plan filters">
     <section class="rail-status">
       <h2 class="tag">Status</h2>
       <div class="facets" id="status-facets"></div>
     </section>
     <section class="rail-repos">
-      <h2 class="tag">Repository</h2>
+      <h2 class="tag">Projects</h2>
       <div class="facets" id="repo-facets"></div>
     </section>
   </aside>
 
   <main>
-    <section id="plans-view">
+    <section id="plans-view" aria-labelledby="library-title">
+      <div class="library-heading">
+        <h2 id="library-title">All plans</h2>
+        <div class="library-toolbar">
+          <p id="library-count" role="status">Loading your library…</p>
+          <button id="clear-filters" data-action="clear-filters" class="hidden">Clear filters</button>
+        </div>
+      </div>
       <div id="groups"></div>
       <div id="plans-placeholder" class="placeholder hidden"></div>
     </section>
