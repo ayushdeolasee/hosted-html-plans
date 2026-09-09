@@ -13,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/ayushdeolasee/hosted-html-plans/internal/buildinfo"
 )
 
 // FunnelController abstracts the on-demand public funnel listener. The tsnet
@@ -35,6 +37,10 @@ type Server struct {
 	Store  *Store
 	Funnel FunnelController
 	Logger *log.Logger
+
+	// updates is intentionally replaceable so HTTP tests never need to reach
+	// GitHub or touch the running test binary.
+	updates UpdateManager
 
 	// Config is the live, in-memory configuration. It can be mutated at
 	// runtime by the settings API (PUT /api/settings), so all access goes
@@ -127,7 +133,7 @@ func NewServer(store *Store, cfg Config, funnel FunnelController, logger *log.Lo
 	if logger == nil {
 		logger = log.Default()
 	}
-	s := &Server{Store: store, Config: cfg, Funnel: funnel, Logger: logger}
+	s := &Server{Store: store, Config: cfg, Funnel: funnel, Logger: logger, updates: unavailableUpdates{}}
 	s.HomepageHandler = ServeUI
 	return s
 }
@@ -159,6 +165,8 @@ func (s *Server) FullHandler() http.Handler {
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("PUT /api/settings", s.handlePutSettings)
 	mux.HandleFunc("GET /api/tailnet/status", s.handleTailnetStatus)
+	mux.HandleFunc("GET /api/updates", s.handleGetUpdates)
+	mux.HandleFunc("POST /api/updates", s.handleInstallUpdate)
 
 	mux.HandleFunc("GET /api/trash", s.handleListTrash)
 	mux.HandleFunc("POST /api/trash/{slug}/restore", s.handleRestoreTrash)
@@ -279,7 +287,8 @@ func statusForStoreErr(err error) int {
 // ---- handlers ----
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": buildinfo.Version})
 }
 
 func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
