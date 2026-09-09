@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ayushdeolasee/hosted-html-plans/internal/buildinfo"
+	"github.com/ayushdeolasee/hosted-html-plans/internal/selfupdate"
 	"github.com/ayushdeolasee/hosted-html-plans/server"
 )
 
@@ -28,10 +30,17 @@ func main() {
 		os.Exit(2)
 	}
 	switch os.Args[1] {
+	case "version", "--version":
+		fmt.Println(buildinfo.Version)
 	case "run":
 		os.Exit(cmdRun(os.Args[2:]))
 	case "service":
 		os.Exit(cmdService(os.Args[2:]))
+	case "__apply-update":
+		// This internal command is launched only as a separate one-shot
+		// launchd/systemd job, so it survives restarting the server and can
+		// restore the original executable if restart verification fails.
+		os.Exit(selfupdate.RunApplyHelper(os.Args[2:], log.Default()))
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -45,6 +54,7 @@ func usage() {
 	fmt.Fprint(os.Stderr, `plans — hosted HTML plans server
 
 Commands:
+  version                    Print the installed build version.
   run                        Run the server in the foreground (LAN listener).
   service install            Install as a background service (launchd on macOS,
                               systemd on Linux) and start it.
@@ -97,6 +107,7 @@ func cmdRun(args []string) int {
 	}
 
 	srv := server.NewServer(store, cfg, nil, log.Default())
+	srv.SetUpdateManager(selfupdate.NewManager(buildinfo.Version, log.Default()))
 	log.Printf("data dir: %s", dataDir)
 
 	// Build the routers once and reuse them across every listener: the full

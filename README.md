@@ -105,13 +105,76 @@ LAN/cloud address remains available as the fallback.
 make build           # compiles ./plans for your current machine
 make cross           # cross-compiles darwin/linux × arm64/amd64 into dist/
 make test            # go test ./... (+ the generated-artifact staleness guard)
-make release TAG=v0.1.0   # cross-compile and publish a GitHub release
+make checksums       # cross-compile and write dist/checksums.txt
 ```
 
 `plans` is a single static binary (`CGO_ENABLED=0`) — copying it anywhere is
-the entire deployment step. `make release` is what keeps
-`install.sh --server` working: it uploads all four binaries under the exact
-names the installer looks for (`plans-<os>-<arch>`).
+the entire deployment step. Development builds report version `dev`; release
+builds embed their `vX.Y.Z` tag. Release assets keep
+the exact names the installer looks for (`plans-<os>-<arch>`) and include a
+`checksums.txt` containing SHA-256 sums for all four binaries.
+
+### Releasing and updating
+
+Releases are normally cut by pushing a stable semantic-version tag. Run the
+checks on the commit you intend to release, create its tag, and push only that
+tag:
+
+```bash
+make test
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The `Release` GitHub Actions workflow accepts exact `vX.Y.Z` tags, repeats the
+tests, builds all four macOS/Linux architecture combinations with that version,
+generates `checksums.txt`, and publishes only after the complete bundle is
+ready. A failed test or build cannot publish a release. If automation is
+unavailable, an already-pushed tag at the current commit can be released with
+`make release TAG=v0.1.0`; it uses the same builds and checksums and keeps the
+release as a draft until every asset has uploaded.
+
+Updates from the app's Settings page are manual: it checks the latest stable
+GitHub release and installs/restarts only after you explicitly request it. It
+does not update automatically, and it preserves the existing plan data and
+configuration. A server installed before the Settings updater exists must be
+bootstrapped once with the current `install.sh --server`; after that, later
+releases can be installed from Settings when the service has permission to
+replace its executable and restart its supervisor. Development (`dev`) builds,
+foreground runs, non-writable executable directories, and non-root systemd
+system services require a command-line update instead; Settings explains why.
+The updater never asks for sudo or changes directory permissions. It attempts
+rollback if immediate supervisor activation fails. A new PID is not a full
+health check: the browser separately confirms the running version through
+`/healthz`, and the previous executable is retained beside the binary as a
+`.plans-backup-*` file for manual recovery. Its exact path is written to the
+service log. Once you have confirmed a release works, those retained backup
+files can be removed manually to reclaim space.
+
+For a per-user installation that can update itself, choose a user-writable
+binary directory during the one-time release bootstrap. If you are moving an
+existing macOS installation to a different binary directory, first run
+`plans service uninstall` to unload the old LaunchAgent (this stops the service
+but does not delete plans or configuration), then run the installer below:
+
+```bash
+# macOS (the installer registers a per-user LaunchAgent)
+U=https://raw.githubusercontent.com/ayushdeolasee/hosted-html-plans/main/install.sh
+curl -fsSL "$U" | bash -s -- --server --bin-dir "$HOME/.local/bin"
+
+# Linux: use a user service as well as a user-writable binary directory
+curl -fsSL "$U" | bash -s -- --server --user --bin-dir "$HOME/.local/bin"
+```
+
+Do not switch an existing Linux system service to a user service without first
+stopping its system unit and preserving its configured data/config paths; two
+services must not serve the same plan store. Keep the existing install scope
+and use administrator-managed updates if unsure.
+
+The update API uses the same trusted LAN/tailnet boundary as the other
+management APIs. Cross-origin browser requests are rejected, but this is not
+user authentication: only trusted people and trusted plan HTML should have
+access to the management origin. The public share router has no update route.
 
 To install from a checkout instead of a release — the flow when you're
 editing this repo — use the dev wrapper, which regenerates `install.sh` first
@@ -126,6 +189,7 @@ make install-server ARGS=--print
 ### Managing the service directly
 
 ```bash
+plans version             # installed build version (or dev)
 plans service status      # running? which listeners? tailnet auth state? funnel on?
 plans service install     # what `install.sh --server` calls for you
 plans service uninstall   # stop + remove the service registration
@@ -226,7 +290,9 @@ The public funnel listener, when open, serves exactly one read-only route:
 | `DELETE /api/plans/{slug}` | Archive to trash (recoverable). |
 | `GET /api/trash` · `POST /api/trash/{slug}/restore` · `DELETE /api/trash/{slug}` | Trash view, restore, permanent purge (human-only by convention). |
 | `POST /api/plans/{slug}/share` · `DELETE .../share` | Open a public share token (opens the funnel listener if needed) / revoke it (closes the listener if it was the last share). |
-| `GET /healthz` | Liveness check; `plans service status` uses it. |
+| `GET /api/updates` | Check installed/latest stable versions and whether this service can self-update. |
+| `POST /api/updates` | Explicitly install the latest verified release; send `{}` with `Content-Type: application/json`. A 202 response means restart was scheduled, not that the new version is healthy. |
+| `GET /healthz` | Liveness and running `version`; also used to confirm the new version after an update. |
 
 Every write response includes ready-to-open `urls.lan` / `urls.tailnet`.
 

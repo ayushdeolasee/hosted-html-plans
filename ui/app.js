@@ -24,6 +24,12 @@
     // settings view
     settings: null,          // last GET/PUT /api/settings response
     settingsLoaded: false,
+    update: null,
+    updateCurrent: "—",
+    updateBusy: false,
+    updateConfirm: false,
+    updateError: "",
+    updateMessage: "",
     tsToggleBusy: false,     // tailscale_enabled PUT in flight (disables the switch)
     tailnetPollTimer: null,  // only set while polling GET /api/tailnet/status
   };
@@ -491,6 +497,102 @@
     scheduleTailnetPoll();
   }
 
+  // ---- manual software updates ----
+
+  function renderUpdate() {
+    const u = state.update;
+    el("update-current").textContent = u ? u.current_version : state.updateCurrent;
+    el("update-latest").textContent = u && u.latest_version ? u.latest_version : u ? "Not available" : "Not checked";
+    el("update-status").textContent = state.updateMessage || (u
+      ? !u.supported ? u.reason || "This installation must be updated from the command line."
+        : u.update_available ? "A new stable release is ready to install."
+        : u.latest_version ? "You're up to date." : "No stable release has been published yet."
+      : "Check for a new release when you're ready.");
+    el("update-error").textContent = state.updateError;
+    el("update-error").classList.toggle("hidden", !state.updateError);
+    el("update-check").disabled = state.updateBusy;
+    el("update-install").disabled = state.updateBusy;
+    el("update-install").classList.toggle("hidden", !(u && u.supported && u.update_available) || state.updateConfirm);
+    el("update-confirm").classList.toggle("hidden", !state.updateConfirm);
+    el("update-confirm-install").disabled = state.updateBusy;
+    el("update-cancel").disabled = state.updateBusy;
+    const notes = el("update-notes");
+    // Build the link on the official repository, never from an arbitrary URL.
+    const releaseTag = u && /^v\d+\.\d+\.\d+$/.test(u.latest_version) ? u.latest_version : "";
+    notes.classList.toggle("hidden", !releaseTag);
+    if (releaseTag) notes.href = `https://github.com/ayushdeolasee/hosted-html-plans/releases/tag/${encodeURIComponent(releaseTag)}`;
+    else notes.removeAttribute("href");
+  }
+
+  async function checkUpdates() {
+    if (state.updateBusy) return;
+    state.updateBusy = true;
+    state.updateConfirm = false;
+    state.updateError = "";
+    state.updateMessage = "Checking GitHub for a stable release…";
+    renderUpdate();
+    try {
+      const response = await fetch("/api/updates", { cache: "no-store", signal: AbortSignal.timeout(30000) });
+      const result = await response.json();
+      if (!response.ok || result.status === "error") throw new Error(result.error || result.reason || "GitHub could not be reached.");
+      state.update = result;
+      state.updateCurrent = result.current_version;
+      if (result.status === "available" && result.reason) state.updateError = result.reason;
+    } catch (e) {
+      state.update = null;
+      state.updateError = `Couldn't check for updates. ${e.message}`;
+    } finally {
+      state.updateBusy = false;
+      state.updateMessage = "";
+      renderUpdate();
+    }
+  }
+
+  async function installUpdate() {
+    if (state.updateBusy || !state.updateConfirm || !state.update || !state.update.supported || !state.update.update_available) return;
+    let target = state.update.latest_version;
+    state.updateBusy = true;
+    state.updateError = "";
+    state.updateMessage = "Downloading and verifying the update. Keep this page open…";
+    renderUpdate();
+    try {
+      const response = await fetch("/api/updates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+        signal: AbortSignal.timeout(180000),
+      });
+      const result = await response.json();
+      if (!response.ok || result.status === "error") throw new Error(result.error || result.reason || "The update could not be installed.");
+      target = result.latest_version || target;
+      state.updateConfirm = false;
+      state.updateMessage = `Restarting the service. Waiting for ${target}…`;
+      renderUpdate();
+      // Health checks are local: reconnecting must not repeatedly query GitHub.
+      const deadline = Date.now() + 90000;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        try {
+          const health = await fetch("/healthz", { cache: "no-store", signal: AbortSignal.timeout(4000) });
+          if (!health.ok) continue;
+          const data = await health.json();
+          if (data.version === target) {
+            location.reload();
+            return;
+          }
+        } catch (_) { /* The service is expected to go offline briefly. */ }
+      }
+      throw new Error("Couldn't confirm the new version after restarting. Check the service on the host, then reload this page.");
+    } catch (e) {
+      state.updateError = `${e.message} Your plans and settings have not been removed.`;
+    } finally {
+      state.updateBusy = false;
+      state.updateConfirm = false;
+      state.updateMessage = "";
+      renderUpdate();
+    }
+  }
+
   function tsStateLabel(tnState) {
     switch (tnState) {
       case "starting": return "Starting…";
@@ -627,6 +729,12 @@
     }
     if (view === "settings") {
       if (location.hash !== "#settings") history.replaceState(null, "", "#settings");
+      if (state.updateCurrent === "—") {
+        api("GET", "/healthz").then((health) => {
+          state.updateCurrent = health.version || "Unknown";
+          renderUpdate();
+        }).catch(() => { /* Checking for updates can retry if the host is offline. */ });
+      }
       if (!state.settingsLoaded) {
         attempt("Couldn't load settings:", loadSettings);
       } else {
@@ -900,6 +1008,18 @@
   el("view-settings").addEventListener("click", () => setView("settings"));
   el("revoke-all").addEventListener("click", doRevokeAll);
 
+  el("update-check").addEventListener("click", checkUpdates);
+  el("update-install").addEventListener("click", () => {
+    state.updateConfirm = true;
+    renderUpdate();
+    el("update-confirm-install").focus();
+  });
+  el("update-cancel").addEventListener("click", () => {
+    state.updateConfirm = false;
+    renderUpdate();
+    el("update-install").focus();
+  });
+  el("update-confirm-install").addEventListener("click", installUpdate);
   tsEnabledEl.addEventListener("change", toggleTailscale);
   settingsSaveEl.addEventListener("click", saveServerSettings);
   tsAuthCopyEl.addEventListener("click", () => {
