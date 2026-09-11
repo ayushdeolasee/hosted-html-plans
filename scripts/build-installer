@@ -119,8 +119,9 @@ Client options
 Server options
   --binary PATH       Install this local binary instead of fetching one.
   --version TAG       Release tag to fetch (default: the latest release).
-  --bin-dir DIR       Where to install plans (default: /usr/local/bin when
-                      writable or sudo is available, else ~/.local/bin).
+  --bin-dir DIR       Where to install plans (default: ~/.local/bin for macOS
+                      and Linux --user; /usr/local/bin for Linux system units
+                      when writable or sudo is available, else ~/.local/bin).
   --user              Linux: install a user-level systemd unit (no root)
                       instead of a system unit.
   --print             Dry run — show what would be written and run, change
@@ -698,6 +699,12 @@ detect_platform() {
 server_bin_dir() {
   if [ -n "$BIN_DIR" ]; then
     printf '%s' "$BIN_DIR"
+    return
+  fi
+  # Per-user services must be able to stage and replace their own binary
+  # without sudo for updates from Settings to work.
+  if [ "$OS" = "darwin" ] || [ "$USER_UNIT" -eq 1 ]; then
+    printf '%s' "$HOME/.local/bin"
     return
   fi
   # A system-level systemd unit runs as root, so the binary wants to live
