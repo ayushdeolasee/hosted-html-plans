@@ -32,7 +32,8 @@ flags installs both sides.
 ### `--server`
 
 Detects the OS and architecture, downloads the matching binary from the
-latest GitHub release, installs it (to `/usr/local/bin` when possible), and
+latest GitHub release, installs it (to `~/.local/bin` for macOS and Linux
+`--user`, or `/usr/local/bin` when possible for Linux system services), and
 registers it as a service — launchd on macOS, systemd on Linux. If no release
 asset matches the platform and Go is present, it builds from source instead.
 It also makes `plans` available on `PATH`, introduces the CLI, and guides
@@ -151,8 +152,11 @@ health check: the browser separately confirms the running version through
 service log. Once you have confirmed a release works, those retained backup
 files can be removed manually to reclaim space.
 
-For a per-user installation that can update itself, choose a user-writable
-binary directory during the one-time release bootstrap. If you are moving an
+Per-user installations default to `~/.local/bin` so Settings can update the
+executable without sudo. An explicit `--bin-dir` or `PLANS_BIN_DIR` overrides
+this default; that directory must be writable by the service user for Settings
+updates to work. Existing installations in `/usr/local/bin` need a one-time
+migration; the update button cannot move its own installation. If you are moving an
 existing macOS installation to a different binary directory, first run
 `plans service uninstall` to unload the old LaunchAgent (this stops the service
 but does not delete plans or configuration), then run the installer below:
