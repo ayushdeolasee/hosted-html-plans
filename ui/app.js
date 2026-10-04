@@ -201,28 +201,30 @@
     return repos;
   }
 
-  // Replacing a rendered button must not send keyboard focus back to the
-  // document. Its data attributes identify the same control in the new DOM.
-  function preserveButtonFocus(container, renderContent) {
+  // Replacing a rendered control must not send keyboard focus back to the
+  // document. Data attributes or a plan link identify the same control in the new DOM.
+  function preserveControlFocus(container, renderContent) {
     const focused = document.activeElement;
-    if (!container.contains(focused) || !focused.matches("button")) {
+    if (!container.contains(focused) || !focused.matches("button, .plan-title a")) {
       renderContent();
       return;
     }
-    const buttons = [...container.querySelectorAll("button")]
-      .filter((button) => !button.disabled && !button.closest("details:not([open])") && button.getClientRects().length);
-    const index = buttons.indexOf(focused);
+    const controls = [...container.querySelectorAll("button, .plan-title a")]
+      .filter((control) => !control.disabled && !control.closest("details:not([open])") && control.getClientRects().length);
+    const index = controls.indexOf(focused);
     const candidates = index < 0 ? [] : [focused,
-      ...buttons.slice(index + 1), ...buttons.slice(0, index).reverse()];
+      ...controls.slice(index + 1), ...controls.slice(0, index).reverse()];
     renderContent();
     if (candidates.length === 0 || focused.isConnected) return;
-    const replacements = [...container.querySelectorAll("button")]
-      .filter((button) => !button.disabled && !button.closest("details:not([open])") && button.getClientRects().length);
+    const replacements = [...container.querySelectorAll("button, .plan-title a")]
+      .filter((control) => !control.disabled && !control.closest("details:not([open])") && control.getClientRects().length);
     for (const candidate of candidates) {
       const keys = Object.keys(candidate.dataset);
-      if (keys.length === 0) continue;
-      const replacement = replacements.find((button) =>
-        keys.every((key) => button.dataset[key] === candidate.dataset[key]));
+      const href = candidate.matches(".plan-title a") ? candidate.getAttribute("href") : null;
+      if (keys.length === 0 && !href) continue;
+      const replacement = replacements.find((control) => href
+        ? control.matches(".plan-title a") && control.getAttribute("href") === href
+        : keys.every((key) => control.dataset[key] === candidate.dataset[key]));
       if (replacement) {
         replacement.focus({ preventScroll: true });
         return;
@@ -244,7 +246,7 @@
   }
 
   function renderRail() {
-    preserveButtonFocus(statusFacetsEl.closest(".rail"), renderRailContent);
+    preserveControlFocus(statusFacetsEl.closest(".rail"), renderRailContent);
   }
 
   function renderRailContent() {
@@ -414,7 +416,7 @@
       if (details.open) state.openDetails.add(slug);
       else state.openDetails.delete(slug);
     }
-    preserveButtonFocus(groupsEl, renderGroupsContent);
+    preserveControlFocus(groupsEl, renderGroupsContent);
   }
 
   function renderGroupsContent() {
@@ -527,7 +529,7 @@
   }
 
   function renderTrash() {
-    preserveButtonFocus(trashRowsEl, renderTrashContent);
+    preserveControlFocus(trashRowsEl, renderTrashContent);
   }
 
   function renderTrashContent() {
