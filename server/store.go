@@ -757,11 +757,52 @@ func versionIndex(h []VersionEntry, n int) int {
 	return -1
 }
 
-// removeVersionFile unlinks a version blob. A blob that is already gone is
-// not an error: the index entry must still be removable.
-func (s *Store) removeVersionFile(slug string, n int) error {
-	if err := os.Remove(s.versionPath(slug, n)); err != nil && !os.IsNotExist(err) {
-		return err
+// removeHistoryLocked stages blobs outside their readable version paths until
+// the index commits. Callers must hold s.mu and the plan lock.
+func (s *Store) removeHistoryLocked(pl *Plan, kept []VersionEntry, removed []int) error {
+	var staging string
+	var staged []int
+	rollback := func(cause error) error {
+		for _, n := range staged {
+			if err := os.Rename(filepath.Join(staging, versionFile(n)), s.versionPath(pl.Slug, n)); err != nil {
+				cause = errors.Join(cause, fmt.Errorf("restore history version %d: %w", n, err))
+			}
+		}
+		if staging != "" {
+			// Remove only an empty directory: failed restores must retain the blobs.
+			_ = os.Remove(staging)
+		}
+		return cause
+	}
+	for _, n := range removed {
+		path := s.versionPath(pl.Slug, n)
+		if _, err := os.Lstat(path); os.IsNotExist(err) {
+			continue // Already missing blobs must not block removing their entries.
+		} else if err != nil {
+			return rollback(err)
+		}
+		if staging == "" {
+			var err error
+			staging, err = os.MkdirTemp(s.planDir(pl.Slug), ".history-delete-*")
+			if err != nil {
+				return err
+			}
+		}
+		if err := os.Rename(path, filepath.Join(staging, versionFile(n))); err != nil {
+			return rollback(err)
+		}
+		staged = append(staged, n)
+	}
+	oldHistory := pl.History
+	pl.History = kept
+	if err := s.saveLocked(); err != nil {
+		pl.History = oldHistory
+		return rollback(err)
+	}
+	if staging != "" {
+		// The deletion is committed. Cleanup failure leaves private staged blobs,
+		// not readable versions, and must not report the committed deletion failed.
+		_ = os.RemoveAll(staging)
 	}
 	return nil
 }
@@ -796,11 +837,8 @@ func (s *Store) deleteVersionLocked(slug string, n int) (*Plan, error) {
 	if i < 0 {
 		return nil, ErrNotFound
 	}
-	if err := s.removeVersionFile(slug, n); err != nil {
-		return nil, err
-	}
-	pl.History = append(pl.History[:i:i], pl.History[i+1:]...)
-	if err := s.saveLocked(); err != nil {
+	kept := append(pl.History[:i:i], pl.History[i+1:]...)
+	if err := s.removeHistoryLocked(pl, kept, []int{n}); err != nil {
 		return nil, err
 	}
 	return clone(pl), nil
@@ -853,17 +891,13 @@ func (s *Store) pruneHistoryLocked(slug string, keep int) (*Plan, []int, error) 
 			kept = append(kept, e)
 			continue
 		}
-		if err := s.removeVersionFile(slug, e.Version); err != nil {
-			return nil, nil, err
-		}
 		removed = append(removed, e.Version)
 	}
 	if len(removed) == 0 {
 		return clone(pl), nil, nil
 	}
 	sort.Ints(removed)
-	pl.History = kept
-	if err := s.saveLocked(); err != nil {
+	if err := s.removeHistoryLocked(pl, kept, removed); err != nil {
 		return nil, nil, err
 	}
 	return clone(pl), removed, nil
