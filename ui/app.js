@@ -493,8 +493,8 @@
     funnelEl.classList.toggle("hidden", shared.length === 0);
     if (shared.length === 0) return;
     funnelTextEl.textContent = shared.length === 1
-      ? `1 plan is reachable from the public internet.`
-      : `${shared.length} plans are reachable from the public internet.`;
+      ? `Public sharing is enabled for 1 plan.`
+      : `Public sharing is enabled for ${shared.length} plans.`;
   }
 
   function render() {
