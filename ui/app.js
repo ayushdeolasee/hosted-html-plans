@@ -72,7 +72,12 @@
     }
     const res = await fetch(path, opts);
     let data = null;
-    try { data = await res.json(); } catch (_) { /* empty or non-JSON body */ }
+    try { data = await res.json(); } catch (_) {
+      if (res.ok && method === "GET") {
+        throw new Error("The service returned an unreadable response.");
+      }
+      // Successful mutations may legitimately return an empty body.
+    }
     if (!res.ok) {
       const msg = (data && (data.error || data.message)) || res.statusText;
       throw new Error(msg || `request failed (${res.status})`);
@@ -85,6 +90,9 @@
     try {
       const plans = await api("GET", "/api/plans");
       if (request !== plansLoadRequest) return;
+      if (plans !== null && !Array.isArray(plans)) {
+        throw new Error("The service returned an invalid plan list.");
+      }
       state.plans = plans || [];
       state.loading = false;
       state.loadError = null;
@@ -105,6 +113,9 @@
     try {
       const trash = await api("GET", "/api/trash");
       if (request !== trashLoadRequest) return;
+      if (trash !== null && !Array.isArray(trash)) {
+        throw new Error("The service returned an invalid trash list.");
+      }
       state.trash = trash || [];
       state.trashLoaded = true;
       renderTrash();
