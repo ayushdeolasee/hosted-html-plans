@@ -392,14 +392,14 @@ split_plan_url() {
       ;;
   esac
 
+  # Drop a fragment before parsing the query, so ?version=3#section stays v3.
+  path="${path%%#*}"
   case "$path" in
     *\?*)
       query="${path#*\?}"
       path="${path%%\?*}"
       ;;
   esac
-  # Drop a fragment; browsers hand these out and the server never sees them.
-  path="${path%%#*}"
   path="${path%/}"
   slug="${path##*/}"
 
