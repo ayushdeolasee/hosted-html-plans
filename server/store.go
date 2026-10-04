@@ -1023,8 +1023,12 @@ func (s *Store) Rename(key, newTitle, newSlug string) (*Plan, error) {
 	if pl == nil {
 		return nil, ErrNotFound
 	}
+	previous := *pl
+	target := oldSlug
+	var previousRedirects map[string]string
+	moved := false
 	if newSlug != "" {
-		target := Slugify(newSlug)
+		target = Slugify(newSlug)
 		if target != oldSlug {
 			_, live := s.idx.Plans[target]
 			_, trashed := s.idx.Trash[target]
@@ -1032,8 +1036,16 @@ func (s *Store) Rename(key, newTitle, newSlug string) (*Plan, error) {
 			if live || trashed || redirect {
 				return nil, fmt.Errorf("slug %q already in use", target)
 			}
-			if err := os.Rename(s.planDir(oldSlug), s.planDir(target)); err != nil && !os.IsNotExist(err) {
-				return nil, err
+			if err := os.Rename(s.planDir(oldSlug), s.planDir(target)); err != nil {
+				if !os.IsNotExist(err) {
+					return nil, err
+				}
+			} else {
+				moved = true
+			}
+			previousRedirects = make(map[string]string, len(s.idx.Redirects))
+			for from, to := range s.idx.Redirects {
+				previousRedirects[from] = to
 			}
 			delete(s.idx.Plans, oldSlug)
 			pl.Slug = target
@@ -1052,6 +1064,17 @@ func (s *Store) Rename(key, newTitle, newSlug string) (*Plan, error) {
 	}
 	pl.Updated = time.Now().UTC()
 	if err := s.saveLocked(); err != nil {
+		*pl = previous
+		if target != oldSlug {
+			delete(s.idx.Plans, target)
+			s.idx.Plans[oldSlug] = pl
+			s.idx.Redirects = previousRedirects
+		}
+		if moved {
+			if rollbackErr := os.Rename(s.planDir(target), s.planDir(oldSlug)); rollbackErr != nil {
+				return nil, errors.Join(err, fmt.Errorf("rollback plan rename: %w", rollbackErr))
+			}
+		}
 		return nil, err
 	}
 	return clone(pl), nil
