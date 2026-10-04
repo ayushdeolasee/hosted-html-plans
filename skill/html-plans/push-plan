@@ -346,27 +346,35 @@ if isinstance(v, dict):
   fi
 }
 
-# json_slugs — reads GET /api/plans (a JSON array of plan objects) on stdin
-# and prints one slug per line. Same jq > python3 > grep/sed ladder; the
-# fallback is safe here because slugs are always simple "slug": "..." pairs.
+# json_slugs — validate the complete GET /api/plans response before emitting
+# slugs. A parse failure must never look like an empty list: gc deletes drafts
+# missing from this output. Without a real JSON parser, leave the cache alone.
 json_slugs() {
   if command -v jq >/dev/null 2>&1; then
-    jq -r '.[].slug // empty' 2>/dev/null
+    jq -sr '
+      if length == 1 and (.[0] | type == "array" and all(.[];
+        type == "object" and (.slug | type == "string" and test("^[a-z0-9]+(-[a-z0-9]+)*$"))))
+      then .[0][].slug else error("invalid plan list") end
+    ' 2>/dev/null
   elif command -v python3 >/dev/null 2>&1; then
     python3 -c '
-import json, sys
+import json, re, sys
 try:
-    d = json.load(sys.stdin)
+    plans = json.load(sys.stdin)
+    if not isinstance(plans, list) or any(
+        not isinstance(plan, dict) or not isinstance(plan.get("slug"), str)
+        or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", plan["slug"])
+        for plan in plans
+    ):
+        sys.exit(1)
 except Exception:
-    sys.exit(0)
-if isinstance(d, list):
-    for p in d:
-        if isinstance(p, dict) and isinstance(p.get("slug"), str):
-            print(p["slug"])
+    sys.exit(1)
+for plan in plans:
+    print(plan["slug"])
 ' 2>/dev/null
   else
-    grep -o "\"slug\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" 2>/dev/null \
-      | sed -E "s/.*\"slug\"[[:space:]]*:[[:space:]]*\"([^\"]*)\"/\1/"
+    echo "push-plan gc: jq or python3 is required to validate the plan list" >&2
+    return 1
   fi
 }
 
@@ -684,7 +692,10 @@ if [ "$SUBCMD" = "gc" ]; then
       ;;
   esac
 
-  live_slugs="$(json_slugs < "$tmp_body")"
+  if ! live_slugs="$(json_slugs < "$tmp_body")"; then
+    echo "push-plan gc: invalid plan list; no drafts were removed" >&2
+    exit 1
+  fi
 
   removed=0
   for f in "$DRAFT_DIR"/*.html; do
