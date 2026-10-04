@@ -205,6 +205,8 @@ const liveScript = `<script data-plans-live>
     var res = await fetch("/p/" + slug, { cache: "no-store" });
     if (!res.ok) return;
     var doc = new DOMParser().parseFromString(await res.text(), "text/html");
+    // A newer event may have finished while this response was in flight.
+    if (v !== cur) return;
     if (doc.head.innerHTML !== document.head.innerHTML) { location.reload(); return; }
     var y = window.scrollY;
     document.body.replaceWith(document.adoptNode(doc.body));
