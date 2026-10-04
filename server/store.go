@@ -550,7 +550,8 @@ func (s *Store) createNew(slug string, body []byte, p WriteParams) (*Plan, int, 
 	defer s.mu.Unlock()
 	s.idx.Plans[slug] = pl
 	if err := s.saveLocked(); err != nil {
-		return nil, 0, err
+		delete(s.idx.Plans, slug)
+		return nil, 0, errors.Join(err, s.removeVersionFile(slug, 1))
 	}
 	return clone(pl), 1, nil
 }
@@ -586,6 +587,10 @@ func (s *Store) commitFullBodyInner(slug string, body []byte, p WriteParams, act
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Stage changes on a copy so a failed index save can restore the live plan.
+	previous := pl
+	pl = clone(pl)
+	s.idx.Plans[slug] = pl
 	pl.Latest = next
 	pl.Updated = now
 	if p.Title != "" {
@@ -598,7 +603,8 @@ func (s *Store) commitFullBodyInner(slug string, body []byte, p WriteParams, act
 		Version: next, Timestamp: now, Agent: p.Agent, Action: action, Note: p.Note, Forced: forced,
 	})
 	if err := s.saveLocked(); err != nil {
-		return nil, 0, err
+		s.idx.Plans[slug] = previous
+		return nil, 0, errors.Join(err, s.removeVersionFile(slug, next))
 	}
 	return clone(pl), next, nil
 }
@@ -721,6 +727,10 @@ func (s *Store) commitDerivedInner(slug string, body []byte, p WriteParams, acti
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Stage changes on a copy so a failed index save can restore the live plan.
+	previous := pl
+	pl = clone(pl)
+	s.idx.Plans[slug] = pl
 	pl.Latest = next
 	pl.Updated = now
 	if t := extractTitle(body); t != "" {
@@ -731,7 +741,8 @@ func (s *Store) commitDerivedInner(slug string, body []byte, p WriteParams, acti
 		Version: next, Timestamp: now, Agent: p.Agent, Action: action, Note: p.Note,
 	})
 	if err := s.saveLocked(); err != nil {
-		return nil, 0, err
+		s.idx.Plans[slug] = previous
+		return nil, 0, errors.Join(err, s.removeVersionFile(slug, next))
 	}
 	return clone(pl), next, nil
 }
