@@ -19,6 +19,7 @@
     q: "",
     openDetails: new Set(), // preserve disclosures when filters or data refresh
     openLogs: new Set(),    // slugs whose version log is expanded
+    rename: null,          // active title input; defer list replacement while editing
     armed: new Map(),       // "action:slug" -> timeout id, for two-click confirms
 
     // settings view
@@ -409,6 +410,7 @@
   }
 
   function renderGroups() {
+    if (state.rename) return;
     // Native toggle events are queued; capture the current disclosure before
     // a keyboard action replaces its DOM, even if that event has not fired yet.
     for (const details of groupsEl.querySelectorAll(".plan-details")) {
@@ -830,33 +832,68 @@
   // ---- actions ----
 
   function doRename(slug, titleEl) {
+    if (state.rename) {
+      state.rename.focus();
+      return;
+    }
     const current = titleEl.textContent.trim();
     const input = document.createElement("input");
     input.type = "text";
     input.className = "title-edit";
     input.value = current;
     input.setAttribute("aria-label", "Plan title");
+    state.rename = input;
     titleEl.replaceWith(input);
     input.focus();
     input.select();
 
+    const restoreFocus = () => {
+      if (document.activeElement !== input && document.activeElement !== document.body) return;
+      const target = [...groupsEl.querySelectorAll('[data-action="rename"]')]
+        .find((button) => button.dataset.slug === slug)
+        || groupsEl.querySelector(".plan-title a") || el("library-title");
+      if (!target.matches("button, a[href]")) target.tabIndex = -1;
+      target.focus({ preventScroll: true });
+    };
     let settled = false;
-    const commit = async () => {
+    const commit = async (returnFocus) => {
       if (settled) return;
       settled = true;
+      input.readOnly = true;
       const next = input.value.trim();
       if (next && next !== current) {
-        await attempt("Couldn't rename the plan:", async () => {
+        try {
           await api("PATCH", `/api/plans/${encodeURIComponent(slug)}`, { title: next });
+          const plan = state.plans.find((plan) => plan.slug === slug);
+          if (plan) plan.title = next;
           toast(`Renamed to “${next}”.`);
-        });
+        } catch (e) {
+          settled = false;
+          input.readOnly = false;
+          toast(`Couldn't rename the plan: ${e.message}`, true);
+          if (returnFocus && (document.activeElement === input || document.activeElement === document.body)) input.focus();
+          return;
+        }
       }
-      await loadPlans();
+      state.rename = null;
+      render();
+      if (returnFocus) restoreFocus();
+      attempt("Couldn't refresh plans:", loadPlans);
     };
-    input.addEventListener("blur", commit);
+    // Let Tab/click navigation settle before replacing the row on blur.
+    input.addEventListener("blur", () => queueMicrotask(() => commit(false)));
     input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") input.blur();
-      if (e.key === "Escape") { settled = true; render(); }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        commit(true);
+      }
+      if (e.key === "Escape" && !settled) {
+        e.preventDefault();
+        settled = true;
+        state.rename = null;
+        render();
+        restoreFocus();
+      }
     });
   }
 
