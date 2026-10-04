@@ -899,15 +899,23 @@
 
   function doShare(slug, shared) {
     return attempt("Couldn't change sharing:", async () => {
+      let res = null;
+      if (shared) await api("DELETE", `/api/plans/${encodeURIComponent(slug)}/share`);
+      else res = await api("POST", `/api/plans/${encodeURIComponent(slug)}/share`, "");
+      const plan = state.plans.find((plan) => plan.slug === slug);
+      if (plan) plan.share_token = shared ? null : res.token;
+      render();
       if (shared) {
-        await api("DELETE", `/api/plans/${encodeURIComponent(slug)}/share`);
         toast("Stopped sharing. The public link no longer resolves.");
       } else {
-        const res = await api("POST", `/api/plans/${encodeURIComponent(slug)}/share`, "");
-        await copy((res && res.url) || planUrl(slug));
-        toast("Shared publicly. Link copied to the clipboard.");
+        try {
+          await copy((res && res.url) || planUrl(slug));
+          toast("Shared publicly. Link copied to the clipboard.");
+        } catch (_) {
+          toast("Shared publicly, but couldn't copy the link. Open the plan to copy its address.", true);
+        }
       }
-      await loadPlans();
+      await attempt("Couldn't refresh plans:", loadPlans);
     });
   }
 
@@ -987,13 +995,23 @@
       await navigator.clipboard.writeText(text);
     } catch (_) {
       // Clipboard API needs a secure context; the LAN listener is plain HTTP.
+      const focused = document.activeElement;
       const ta = document.createElement("textarea");
       ta.value = text;
       ta.style.cssText = "position:fixed;opacity:0";
       document.body.appendChild(ta);
-      ta.select();
-      try { document.execCommand("copy"); } catch (_) { /* nothing left to try */ }
-      ta.remove();
+      let copied = false;
+      try {
+        ta.select();
+        copied = document.execCommand("copy");
+      } catch (_) { /* Surface a single readable failure below. */ }
+      finally {
+        ta.remove();
+        if (focused.isConnected && document.activeElement === document.body) {
+          focused.focus({ preventScroll: true });
+        }
+      }
+      if (!copied) throw new Error("Clipboard access is unavailable.");
     }
   }
 
@@ -1022,9 +1040,11 @@
         renderGroups();
         break;
       case "copy-link":
-        copy(planUrl(slug));
-        btn.textContent = "Copied";
-        setTimeout(() => { btn.textContent = "Copy link"; }, 1400);
+        attempt("Couldn't copy the link:", async () => {
+          await copy(planUrl(slug));
+          btn.textContent = "Copied";
+          setTimeout(() => { btn.textContent = "Copy link"; }, 1400);
+        });
         break;
       case "rename": {
         const titleEl = btn.closest(".row").querySelector('[data-role="title"]');
@@ -1116,9 +1136,11 @@
   tsAuthCopyEl.addEventListener("click", () => {
     const url = state.settings && state.settings.tailnet && state.settings.tailnet.auth_url;
     if (!url) return;
-    copy(url);
-    tsAuthCopyEl.textContent = "Copied";
-    setTimeout(() => { tsAuthCopyEl.textContent = "Copy link"; }, 1400);
+    attempt("Couldn't copy the link:", async () => {
+      await copy(url);
+      tsAuthCopyEl.textContent = "Copied";
+      setTimeout(() => { tsAuthCopyEl.textContent = "Copy link"; }, 1400);
+    });
   });
 
   document.addEventListener("keydown", (e) => {
