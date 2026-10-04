@@ -1023,13 +1023,13 @@ func (s *Store) Rename(key, newTitle, newSlug string) (*Plan, error) {
 	if pl == nil {
 		return nil, ErrNotFound
 	}
-	if newTitle != "" {
-		pl.Title = newTitle
-	}
 	if newSlug != "" {
 		target := Slugify(newSlug)
 		if target != oldSlug {
-			if _, taken := s.idx.Plans[target]; taken {
+			_, live := s.idx.Plans[target]
+			_, trashed := s.idx.Trash[target]
+			_, redirect := s.idx.Redirects[target]
+			if live || trashed || redirect {
 				return nil, fmt.Errorf("slug %q already in use", target)
 			}
 			if err := os.Rename(s.planDir(oldSlug), s.planDir(target)); err != nil && !os.IsNotExist(err) {
@@ -1046,6 +1046,9 @@ func (s *Store) Rename(key, newTitle, newSlug string) (*Plan, error) {
 				}
 			}
 		}
+	}
+	if newTitle != "" {
+		pl.Title = newTitle
 	}
 	pl.Updated = time.Now().UTC()
 	if err := s.saveLocked(); err != nil {
