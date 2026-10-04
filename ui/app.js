@@ -62,6 +62,9 @@
 
   // ---- api ----
 
+  let plansLoadRequest = 0;
+  let trashLoadRequest = 0;
+
   async function api(method, path, body) {
     const opts = { method };
     if (body !== undefined) {
@@ -78,16 +81,37 @@
   }
 
   async function loadPlans() {
-    state.plans = (await api("GET", "/api/plans")) || [];
-    state.loading = false;
-    state.loadError = null;
-    render();
+    const request = ++plansLoadRequest;
+    try {
+      const plans = await api("GET", "/api/plans");
+      if (request !== plansLoadRequest) return;
+      state.plans = plans || [];
+      state.loading = false;
+      state.loadError = null;
+      render();
+    } catch (e) {
+      if (request !== plansLoadRequest) return;
+      if (state.loading || state.loadError !== null) {
+        state.loading = false;
+        state.loadError = e.message;
+        render();
+      }
+      throw e;
+    }
   }
 
   async function loadTrash() {
-    state.trash = (await api("GET", "/api/trash")) || [];
-    state.trashLoaded = true;
-    renderTrash();
+    const request = ++trashLoadRequest;
+    try {
+      const trash = await api("GET", "/api/trash");
+      if (request !== trashLoadRequest) return;
+      state.trash = trash || [];
+      state.trashLoaded = true;
+      renderTrash();
+    } catch (e) {
+      if (request !== trashLoadRequest) return;
+      throw e;
+    }
   }
 
   // Wraps an action so a failure surfaces as a toast rather than an alert().
@@ -1139,11 +1163,7 @@
 
   function boot() {
     loadPlans()
-      .catch((e) => {
-        state.loading = false;
-        state.loadError = e.message;
-        render();
-      })
+      .catch(() => { /* Initial failures are rendered by loadPlans. */ })
       .finally(() => {
         // The entrance animation is a one-time moment. Once it has played,
         // drop the class: filtering, expanding a log and ticking a status all
