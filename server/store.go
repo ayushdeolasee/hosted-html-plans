@@ -1152,14 +1152,40 @@ func (s *Store) RestoreTrash(slug string) (*Plan, error) {
 func (s *Store) PurgeTrash(slug string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.idx.Trash[slug]; !ok {
+	pl, ok := s.idx.Trash[slug]
+	if !ok {
 		return ErrNotFound
 	}
-	if err := os.RemoveAll(filepath.Join(s.dir, "trash", slug)); err != nil {
+	src := filepath.Join(s.dir, "trash", slug)
+	var staging string
+	if _, err := os.Lstat(src); err == nil {
+		staging, err = os.MkdirTemp(filepath.Join(s.dir, "trash"), ".purge-*")
+		if err != nil {
+			return err
+		}
+		if err := os.Rename(src, filepath.Join(staging, "plan")); err != nil {
+			_ = os.Remove(staging)
+			return err
+		}
+	} else if !os.IsNotExist(err) {
 		return err
 	}
 	delete(s.idx.Trash, slug)
-	return s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		s.idx.Trash[slug] = pl
+		if staging != "" {
+			if rollbackErr := os.Rename(filepath.Join(staging, "plan"), src); rollbackErr != nil {
+				return errors.Join(err, fmt.Errorf("rollback trash purge: %w", rollbackErr))
+			}
+			_ = os.Remove(staging)
+		}
+		return err
+	}
+	if staging != "" {
+		// The purge committed. Inaccessible staged bytes may remain if cleanup fails.
+		_ = os.RemoveAll(staging)
+	}
+	return nil
 }
 
 // Share generates (or returns the existing) share token for a plan.
