@@ -252,7 +252,7 @@ func TestLiveScriptInjection(t *testing.T) {
 	if !strings.Contains(latest, "data-plans-live") {
 		t.Error("latest view is missing the live-reload client")
 	}
-	if !strings.Contains(latest, "cur = 2") {
+	if !strings.Contains(latest, "currentApplied = 2") {
 		t.Errorf("live client not primed with the current version; body:\n%s", latest)
 	}
 

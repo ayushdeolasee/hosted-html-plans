@@ -184,7 +184,8 @@ const liveScript = `<script data-plans-live>
 (function () {
   if (window.__plansLive) return;
   window.__plansLive = true;
-  var slug = %q, cur = %d;
+  var slug = %q, currentApplied = %d;
+  var highestObserved = currentApplied, inflightVersion = 0;
 
   function toast(msg) {
     var t = document.createElement("div");
@@ -202,24 +203,35 @@ const liveScript = `<script data-plans-live>
   }
 
   async function refresh(v) {
-    var res = await fetch("/p/" + slug, { cache: "no-store" });
-    if (!res.ok) return;
-    var doc = new DOMParser().parseFromString(await res.text(), "text/html");
-    // A newer event may have finished while this response was in flight.
-    if (v !== cur) return;
-    if (doc.head.innerHTML !== document.head.innerHTML) { location.reload(); return; }
-    var y = window.scrollY;
-    document.body.replaceWith(document.adoptNode(doc.body));
-    window.scrollTo(0, y);
-    toast("Updated to v" + v);
+    try {
+      var res = await fetch("/p/" + slug, { cache: "no-store" });
+      if (!res.ok || v !== highestObserved) return;
+      var doc = new DOMParser().parseFromString(await res.text(), "text/html");
+      // A newer event may have arrived while either await was in flight.
+      if (v !== highestObserved) return;
+      if (doc.head.innerHTML !== document.head.innerHTML) {
+        location.reload();
+        currentApplied = v;
+        return;
+      }
+      var y = window.scrollY;
+      document.body.replaceWith(document.adoptNode(doc.body));
+      currentApplied = v;
+      window.scrollTo(0, y);
+      toast("Updated to v" + v);
+    } finally {
+      // An older completion must not clear a newer request's pending state.
+      if (inflightVersion === v) inflightVersion = 0;
+    }
   }
 
-  var es = new EventSource("/api/plans/" + slug + "/events?since=" + cur);
+  var es = new EventSource("/api/plans/" + slug + "/events?since=" + currentApplied);
   es.onmessage = function (e) {
     var v;
     try { v = JSON.parse(e.data).latest; } catch (_) { return; }
-    if (!v || v <= cur) return;
-    cur = v;
+    if (!v || v < highestObserved || v <= currentApplied || v === inflightVersion) return;
+    highestObserved = v;
+    inflightVersion = v;
     refresh(v).catch(function () {});
   };
 })();
