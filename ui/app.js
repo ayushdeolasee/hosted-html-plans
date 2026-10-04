@@ -201,6 +201,39 @@
     return repos;
   }
 
+  // Replacing a rendered button must not send keyboard focus back to the
+  // document. Its data attributes identify the same control in the new DOM.
+  function preserveButtonFocus(container, renderContent) {
+    const focused = document.activeElement;
+    if (!container.contains(focused) || !focused.matches("button")) {
+      renderContent();
+      return;
+    }
+    const buttons = [...container.querySelectorAll("button")]
+      .filter((button) => !button.disabled && !button.closest("details:not([open])") && button.getClientRects().length);
+    const index = buttons.indexOf(focused);
+    const candidates = index < 0 ? [] : [focused,
+      ...buttons.slice(index + 1), ...buttons.slice(0, index).reverse()];
+    renderContent();
+    if (candidates.length === 0 || focused.isConnected) return;
+    const replacements = [...container.querySelectorAll("button")]
+      .filter((button) => !button.disabled && !button.closest("details:not([open])") && button.getClientRects().length);
+    for (const candidate of candidates) {
+      const keys = Object.keys(candidate.dataset);
+      if (keys.length === 0) continue;
+      const replacement = replacements.find((button) =>
+        keys.every((key) => button.dataset[key] === candidate.dataset[key]));
+      if (replacement) {
+        replacement.focus({ preventScroll: true });
+        return;
+      }
+    }
+    const fallback = container.querySelector(".plan-title a")
+      || container.closest("section")?.querySelector("h2, .note-line") || el("library-title");
+    if (!fallback.matches("a[href]")) fallback.tabIndex = -1;
+    fallback.focus({ preventScroll: true });
+  }
+
   // ---- rail ----
 
   function facet({ label, count, active, key, mono }) {
@@ -211,6 +244,10 @@
   }
 
   function renderRail() {
+    preserveButtonFocus(statusFacetsEl.closest(".rail"), renderRailContent);
+  }
+
+  function renderRailContent() {
     const byStatus = (s) => state.plans.filter((p) => statusOf(p) === s).length;
     statusFacetsEl.innerHTML = [
       facet({ label: "Any", count: state.plans.length, active: state.status === "", key: "" }),
@@ -370,6 +407,17 @@
   }
 
   function renderGroups() {
+    // Native toggle events are queued; capture the current disclosure before
+    // a keyboard action replaces its DOM, even if that event has not fired yet.
+    for (const details of groupsEl.querySelectorAll(".plan-details")) {
+      const slug = details.closest("[data-slug]").dataset.slug;
+      if (details.open) state.openDetails.add(slug);
+      else state.openDetails.delete(slug);
+    }
+    preserveButtonFocus(groupsEl, renderGroupsContent);
+  }
+
+  function renderGroupsContent() {
     const filtered = state.plans.filter(matches);
     const hasFilters = !!(state.q || state.status || state.repo !== null);
     const projects = new Set(filtered.map((p) => p.repo || ""));
@@ -479,6 +527,10 @@
   }
 
   function renderTrash() {
+    preserveButtonFocus(trashRowsEl, renderTrashContent);
+  }
+
+  function renderTrashContent() {
     if (state.trash.length === 0) {
       trashRowsEl.innerHTML = "";
       placeholder(trashPlaceholderEl, `<p>Trash is empty.</p>`);
