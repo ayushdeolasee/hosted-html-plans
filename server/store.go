@@ -1171,12 +1171,14 @@ func (s *Store) Share(key string) (token string, firstOverall bool, err error) {
 	if pl == nil {
 		return "", false, ErrNotFound
 	}
+	previousToken := pl.ShareToken
 	firstOverall = s.activeShareCountLocked() == 0
 	if pl.ShareToken == nil {
 		t := newShareToken()
 		pl.ShareToken = &t
 	}
 	if err := s.saveLocked(); err != nil {
+		pl.ShareToken = previousToken
 		return "", false, err
 	}
 	return *pl.ShareToken, firstOverall, nil
@@ -1191,9 +1193,11 @@ func (s *Store) Unshare(key string) (lastOverall bool, err error) {
 	if pl == nil {
 		return false, ErrNotFound
 	}
+	previousToken := pl.ShareToken
 	pl.ShareToken = nil
 	lastOverall = s.activeShareCountLocked() == 0
 	if err := s.saveLocked(); err != nil {
+		pl.ShareToken = previousToken
 		return false, err
 	}
 	return lastOverall, nil
