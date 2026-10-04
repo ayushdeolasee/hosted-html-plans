@@ -1087,16 +1087,35 @@ func (s *Store) Delete(key string) (wasShared bool, err error) {
 		return false, ErrNotFound
 	}
 	wasShared = pl.ShareToken != nil
+	previous := *pl
+	previousTrash, hadTrash := s.idx.Trash[slug]
 	dst := filepath.Join(s.dir, "trash", slug)
 	_ = os.RemoveAll(dst) // clear any stale trash for this slug
-	if err := os.Rename(s.planDir(slug), dst); err != nil && !os.IsNotExist(err) {
-		return false, err
+	moved := false
+	if err := os.Rename(s.planDir(slug), dst); err != nil {
+		if !os.IsNotExist(err) {
+			return false, err
+		}
+	} else {
+		moved = true
 	}
 	now := time.Now().UTC()
 	pl.TrashedAt = &now
 	delete(s.idx.Plans, slug)
 	s.idx.Trash[slug] = pl
 	if err := s.saveLocked(); err != nil {
+		*pl = previous
+		s.idx.Plans[slug] = pl
+		if hadTrash {
+			s.idx.Trash[slug] = previousTrash
+		} else {
+			delete(s.idx.Trash, slug)
+		}
+		if moved {
+			if rollbackErr := os.Rename(dst, s.planDir(slug)); rollbackErr != nil {
+				return false, errors.Join(err, fmt.Errorf("rollback plan delete: %w", rollbackErr))
+			}
+		}
 		return false, err
 	}
 	return wasShared, nil
@@ -1131,18 +1150,33 @@ func (s *Store) RestoreTrash(slug string) (*Plan, error) {
 	if pl == nil {
 		return nil, ErrNotFound
 	}
+	previous := *pl
 	target := slug
 	if _, taken := s.idx.Plans[slug]; taken {
 		target = s.uniqueSlugLocked(slug)
 	}
-	if err := os.Rename(filepath.Join(s.dir, "trash", slug), s.planDir(target)); err != nil && !os.IsNotExist(err) {
-		return nil, err
+	src := filepath.Join(s.dir, "trash", slug)
+	moved := false
+	if err := os.Rename(src, s.planDir(target)); err != nil {
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+	} else {
+		moved = true
 	}
 	pl.TrashedAt = nil
 	pl.Slug = target
 	delete(s.idx.Trash, slug)
 	s.idx.Plans[target] = pl
 	if err := s.saveLocked(); err != nil {
+		*pl = previous
+		delete(s.idx.Plans, target)
+		s.idx.Trash[slug] = pl
+		if moved {
+			if rollbackErr := os.Rename(s.planDir(target), src); rollbackErr != nil {
+				return nil, errors.Join(err, fmt.Errorf("rollback trash restore: %w", rollbackErr))
+			}
+		}
 		return nil, err
 	}
 	return clone(pl), nil
