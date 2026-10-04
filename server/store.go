@@ -757,6 +757,15 @@ func versionIndex(h []VersionEntry, n int) int {
 	return -1
 }
 
+// removeVersionFile unlinks a version blob. A blob that is already gone is
+// not an error: the index entry must still be removable.
+func (s *Store) removeVersionFile(slug string, n int) error {
+	if err := os.Remove(s.versionPath(slug, n)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 // removeHistoryLocked stages blobs outside their readable version paths until
 // the index commits. Callers must hold s.mu and the plan lock.
 func (s *Store) removeHistoryLocked(pl *Plan, kept []VersionEntry, removed []int) error {
