@@ -201,6 +201,41 @@
     return repos;
   }
 
+  // Replacing a rendered control must not send keyboard focus back to the
+  // document. Data attributes or a plan link identify the same control in the new DOM.
+  function preserveControlFocus(container, renderContent) {
+    const focused = document.activeElement;
+    if (!container.contains(focused) || !focused.matches("button, .plan-title a")) {
+      renderContent();
+      return;
+    }
+    const controls = [...container.querySelectorAll("button, .plan-title a")]
+      .filter((control) => !control.disabled && !control.closest("details:not([open])") && control.getClientRects().length);
+    const index = controls.indexOf(focused);
+    const candidates = index < 0 ? [] : [focused,
+      ...controls.slice(index + 1), ...controls.slice(0, index).reverse()];
+    renderContent();
+    if (candidates.length === 0 || focused.isConnected) return;
+    const replacements = [...container.querySelectorAll("button, .plan-title a")]
+      .filter((control) => !control.disabled && !control.closest("details:not([open])") && control.getClientRects().length);
+    for (const candidate of candidates) {
+      const keys = Object.keys(candidate.dataset);
+      const href = candidate.matches(".plan-title a") ? candidate.getAttribute("href") : null;
+      if (keys.length === 0 && !href) continue;
+      const replacement = replacements.find((control) => href
+        ? control.matches(".plan-title a") && control.getAttribute("href") === href
+        : keys.every((key) => control.dataset[key] === candidate.dataset[key]));
+      if (replacement) {
+        replacement.focus({ preventScroll: true });
+        return;
+      }
+    }
+    const fallback = container.querySelector(".plan-title a")
+      || container.closest("section")?.querySelector("h2, .note-line") || el("library-title");
+    if (!fallback.matches("a[href]")) fallback.tabIndex = -1;
+    fallback.focus({ preventScroll: true });
+  }
+
   // ---- rail ----
 
   function facet({ label, count, active, key, mono }) {
@@ -211,6 +246,10 @@
   }
 
   function renderRail() {
+    preserveControlFocus(statusFacetsEl.closest(".rail"), renderRailContent);
+  }
+
+  function renderRailContent() {
     const byStatus = (s) => state.plans.filter((p) => statusOf(p) === s).length;
     statusFacetsEl.innerHTML = [
       facet({ label: "Any", count: state.plans.length, active: state.status === "", key: "" }),
@@ -370,6 +409,17 @@
   }
 
   function renderGroups() {
+    // Native toggle events are queued; capture the current disclosure before
+    // a keyboard action replaces its DOM, even if that event has not fired yet.
+    for (const details of groupsEl.querySelectorAll(".plan-details")) {
+      const slug = details.closest("[data-slug]").dataset.slug;
+      if (details.open) state.openDetails.add(slug);
+      else state.openDetails.delete(slug);
+    }
+    preserveControlFocus(groupsEl, renderGroupsContent);
+  }
+
+  function renderGroupsContent() {
     const filtered = state.plans.filter(matches);
     const hasFilters = !!(state.q || state.status || state.repo !== null);
     const projects = new Set(filtered.map((p) => p.repo || ""));
@@ -479,6 +529,10 @@
   }
 
   function renderTrash() {
+    preserveControlFocus(trashRowsEl, renderTrashContent);
+  }
+
+  function renderTrashContent() {
     if (state.trash.length === 0) {
       trashRowsEl.innerHTML = "";
       placeholder(trashPlaceholderEl, `<p>Trash is empty.</p>`);
