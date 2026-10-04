@@ -106,6 +106,11 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Subscribe before taking the snapshot: a racing commit is either included
+	// in that snapshot or queued on this channel, so catch-up cannot miss it.
+	ch := s.Store.Events.Subscribe(slug)
+	defer s.Store.Events.Unsubscribe(slug, ch)
+
 	pl, err := s.Store.GetPlan(slug)
 	if err != nil {
 		writeErr(w, statusForStoreErr(err), err.Error())
@@ -123,9 +128,6 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
-
-	ch := s.Store.Events.Subscribe(slug)
-	defer s.Store.Events.Unsubscribe(slug, ch)
 
 	send := func(version int) bool {
 		if _, err := fmt.Fprintf(w, "data: {\"latest\":%d}\n\n", version); err != nil {
