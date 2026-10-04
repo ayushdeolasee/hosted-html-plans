@@ -493,8 +493,8 @@
     funnelEl.classList.toggle("hidden", shared.length === 0);
     if (shared.length === 0) return;
     funnelTextEl.textContent = shared.length === 1
-      ? `1 plan is reachable from the public internet.`
-      : `${shared.length} plans are reachable from the public internet.`;
+      ? `Public sharing is enabled for 1 plan.`
+      : `Public sharing is enabled for ${shared.length} plans.`;
   }
 
   function render() {
@@ -908,11 +908,16 @@
       if (shared) {
         toast("Stopped sharing. The public link no longer resolves.");
       } else {
+        const sharingMessage = res.warning
+          ? `Sharing enabled. Public access could not be confirmed (${res.warning}).`
+          : "Shared publicly.";
         try {
           await copy((res && res.url) || planUrl(slug));
-          toast("Shared publicly. Link copied to the clipboard.");
+          toast(`${sharingMessage} Link copied to the clipboard.`, !!res.warning);
         } catch (_) {
-          toast("Shared publicly, but couldn't copy the link. Open the plan to copy its address.", true);
+          toast(res.warning
+            ? `${sharingMessage} We couldn't copy the link. Open the plan to copy its address.`
+            : "Shared publicly, but couldn't copy the link. Open the plan to copy its address.", true);
         }
       }
       await attempt("Couldn't refresh plans:", loadPlans);
