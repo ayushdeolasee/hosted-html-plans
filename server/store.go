@@ -1086,9 +1086,11 @@ func (s *Store) Delete(key string) (wasShared bool, err error) {
 	if pl == nil {
 		return false, ErrNotFound
 	}
+	if _, recorded := s.idx.Trash[slug]; recorded {
+		return false, fmt.Errorf("plan %q already has a trash entry", slug)
+	}
 	wasShared = pl.ShareToken != nil
 	previous := *pl
-	previousTrash, hadTrash := s.idx.Trash[slug]
 	dst := filepath.Join(s.dir, "trash", slug)
 	_ = os.RemoveAll(dst) // clear any stale trash for this slug
 	moved := false
@@ -1106,11 +1108,7 @@ func (s *Store) Delete(key string) (wasShared bool, err error) {
 	if err := s.saveLocked(); err != nil {
 		*pl = previous
 		s.idx.Plans[slug] = pl
-		if hadTrash {
-			s.idx.Trash[slug] = previousTrash
-		} else {
-			delete(s.idx.Trash, slug)
-		}
+		delete(s.idx.Trash, slug)
 		if moved {
 			if rollbackErr := os.Rename(dst, s.planDir(slug)); rollbackErr != nil {
 				return false, errors.Join(err, fmt.Errorf("rollback plan delete: %w", rollbackErr))
